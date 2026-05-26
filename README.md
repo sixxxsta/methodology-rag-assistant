@@ -71,6 +71,8 @@ docker compose up --build -d
 docker compose --profile gpu up --build -d
 ```
 
+Первый запуск inference: в логах много `GET /ready 503` — **это нормально** (модель качается с HuggingFace). Дождитесь строки `Inference READY: модель загружена` (5–20 мин). Сайт **http://localhost:8090** доступен раньше; чат заработает после загрузки RAG (embeddings) и inference.
+
 **GigaChat (без GPU):**
 
 ```bash

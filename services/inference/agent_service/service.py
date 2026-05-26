@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 class InferenceService:
     def __init__(self, settings: Settings):
-        self.settings = settings
+        self.settings = settings  # exposed for startup logging
         self._tokenizer = None
         self._model = None
         self._load_lock = threading.Lock()

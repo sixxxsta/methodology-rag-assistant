@@ -24,11 +24,18 @@ services:
     volumes:
       - inference_cache:/models/hf-cache
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready')"]
-      interval: 20s
+      # 503 на /ready = модель ещё грузится; 200 = можно генерировать
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=5)",
+        ]
+      interval: 30s
       timeout: 10s
-      retries: 30
-      start_period: 600s
+      retries: 40
+      start_period: 1200s
     deploy:
       resources:
         reservations:
@@ -55,7 +62,7 @@ services:
       qdrant:
         condition: service_started
       inference:
-        condition: service_healthy
+        condition: service_started
         required: false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health')"]

@@ -21,12 +21,20 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Inference Server", version="1.0.0")
 app.include_router(router)
 
-# Eager load model on startup to avoid first-request latency
+def _load_model_background() -> None:
+    settings = service.settings
+    logger.info(
+        "Loading model %s (4bit=%s). /ready returns 503 until done — это нормально.",
+        settings.model_name,
+        settings.use_4bit,
+    )
+    try:
+        service._get_or_load_model()
+        logger.info("=== Inference READY: модель загружена, /ready → 200 ===")
+    except Exception:
+        logger.exception("=== Inference FAILED: не удалось загрузить модель ===")
+
+
 @app.on_event("startup")
-async def startup_event():
-    """Load model on server startup to avoid 17s first-request delay."""
-    logger.info("Eagerly loading model on startup...")
-    threading.Thread(
-        target=service._get_or_load_model,
-        daemon=True
-    ).start()
+async def startup_event() -> None:
+    threading.Thread(target=_load_model_background, daemon=True, name="model-loader").start()
