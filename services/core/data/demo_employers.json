@@ -1,0 +1,47 @@
+[
+  {
+    "id": "demo-1",
+    "name": "ТехноСофт Демо",
+    "area": {"name": "Екатеринбург"},
+    "site_url": "https://example.org",
+    "description": "Разработка ПО для банков и ритейла. Используем Python, PostgreSQL, Docker. Открыты к стажировкам и студенческим проектам.",
+    "industries": [{"name": "IT"}],
+    "open_vacancies": 12
+  },
+  {
+    "id": "demo-2",
+    "name": "DataLab Партнёр",
+    "area": {"name": "Москва"},
+    "site_url": "https://example.org",
+    "description": "Аналитика данных и ML. SQL, Python, Agile. Программа наставничества для студентов УрФУ.",
+    "industries": [{"name": "IT"}],
+    "open_vacancies": 8
+  },
+  {
+    "id": "demo-3",
+    "name": "CloudNine",
+    "area": {"name": "Санкт-Петербург"},
+    "site_url": "https://example.org",
+    "description": "Облачная инфраструктура, DevOps, Kubernetes. Ищем таланты: Git, Linux, Python.",
+    "industries": [{"name": "IT"}],
+    "open_vacancies": 25
+  },
+  {
+    "id": "demo-4",
+    "name": "FinTech Startup",
+    "area": {"name": "Екатеринбург"},
+    "site_url": "https://example.org",
+    "description": "Финтех-продукт. Backend на Python, микросервисы, Scrum. Готовы дать студенческий проект по интеграции API.",
+    "industries": [{"name": "FinTech"}],
+    "open_vacancies": 5
+  },
+  {
+    "id": "demo-5",
+    "name": "EduTech Solutions",
+    "area": {"name": "Казань"},
+    "site_url": "https://example.org",
+    "description": "EdTech платформа. React, Python, PostgreSQL. Сотрудничество с вузами, проектное обучение студентов.",
+    "industries": [{"name": "Образование"}],
+    "open_vacancies": 15
+  }
+]

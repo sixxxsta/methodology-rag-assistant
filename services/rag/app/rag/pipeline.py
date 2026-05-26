@@ -92,6 +92,33 @@ class RAGPipeline:
         )
         return "\n\n".join(parts)
 
+    @staticmethod
+    def _fallback_answer_from_context(
+        question: str, chunks: list[RetrievedChunk]
+    ) -> str:
+        if not chunks:
+            return (
+                "Сервис генерации ответа (inference) сейчас недоступен, "
+                "и в базе знаний нет подходящих фрагментов по вашему вопросу.\n\n"
+                "Запустите LLM:\n"
+                "`docker compose --profile gpu up -d inference`\n\n"
+                "Дождитесь готовности (первый запуск может занять 10–20 минут), "
+                "затем повторите вопрос."
+            )
+        parts = [
+            "⚠️ Модель генерации временно недоступна (inference не запущен или ещё загружается). "
+            "Ниже — релевантные фрагменты из базы знаний по вашему вопросу:\n",
+        ]
+        for i, chunk in enumerate(chunks[:4], start=1):
+            parts.append(
+                f"\n### [{i}] {chunk.source}\n{chunk.text.strip()}"
+            )
+        parts.append(
+            "\n\n---\nЧтобы получить связный ответ от нейросети, выполните в папке проекта:\n"
+            "`docker compose --profile gpu up -d inference`"
+        )
+        return "\n".join(parts)
+
     async def chat(
         self,
         message: str,
@@ -113,11 +140,15 @@ class RAGPipeline:
         if context:
             llm_context = f"{llm_context}\n\n{context}"
 
-        answer = await self.llm.generate(
-            user_prompt,
-            context=llm_context,
-            language=language or self.settings.response_language,
-        )
+        try:
+            answer = await self.llm.generate(
+                user_prompt,
+                context=llm_context,
+                language=language or self.settings.response_language,
+            )
+        except Exception as exc:
+            logger.warning("LLM generate failed (%s), using knowledge fallback", exc)
+            answer = self._fallback_answer_from_context(message, retrieved)
 
         session.add("user", message)
         session.add("assistant", answer)

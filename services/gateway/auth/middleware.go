@@ -37,15 +37,18 @@ func Middleware(issuer *TokenIssuer) func(http.Handler) http.Handler {
 	}
 }
 
-func AdminOnly(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims, ok := ClaimsFromContext(r.Context())
-		if !ok || claims.Role != RoleAdmin {
-			http.Error(w, `{"error":"admin required"}`, http.StatusForbidden)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
+func AdminOnly(adminEmail string) func(http.Handler) http.Handler {
+	normalizedAdmin := normalizeEmail(adminEmail)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims, ok := ClaimsFromContext(r.Context())
+			if !ok || normalizedAdmin == "" || normalizeEmail(claims.Email) != normalizedAdmin {
+				http.Error(w, `{"error":"admin required"}`, http.StatusForbidden)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 func extractToken(r *http.Request) string {

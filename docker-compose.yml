@@ -1,6 +1,33 @@
-# Микросервисы: web (Next.js) → gateway (API) → rag → qdrant + inference (gpu)
+# web → gateway → rag / core → qdrant, postgres, redis + inference (gpu)
 
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: methodology-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-edagent}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-edagent}
+      POSTGRES_DB: ${POSTGRES_DB:-edagent}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-edagent} -d ${POSTGRES_DB:-edagent}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: methodology-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+
   qdrant:
     image: qdrant/qdrant:v1.15.1
     container_name: methodology-qdrant
@@ -66,6 +93,32 @@ services:
       start_period: 300s
     restart: unless-stopped
 
+  core:
+    build:
+      context: ./services/core
+      dockerfile: Dockerfile
+    image: methodology-core:latest
+    container_name: methodology-core
+    env_file: .env
+    ports:
+      - "${CORE_PORT:-8200}:8200"
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-edagent}:${POSTGRES_PASSWORD:-edagent}@postgres:5432/${POSTGRES_DB:-edagent}
+      RAG_SERVICE_URL: http://rag:8100
+      RAG_TIMEOUT_SECONDS: ${RAG_TIMEOUT_SECONDS:-300}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      rag:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8200/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    restart: unless-stopped
+
   gateway:
     build:
       context: ./services/gateway
@@ -77,19 +130,25 @@ services:
       - "${GATEWAY_PORT:-8090}:8090"
     environment:
       RAG_SERVICE_URL: http://rag:8100
+      CORE_SERVICE_URL: http://core:8200
       KNOWLEDGE_DIR: /knowledge
       AUTH_DB_PATH: /app/data/users.db
     volumes:
       - ./knowledge:/knowledge
       - gateway_data:/app/data
     depends_on:
-      - rag
+      rag:
+        condition: service_started
+      core:
+        condition: service_healthy
     restart: unless-stopped
 
   web:
     build:
       context: ./services/web
       dockerfile: Dockerfile
+      args:
+        API_INTERNAL_URL: http://gateway:8090
     image: methodology-web:latest
     container_name: methodology-web
     ports:
@@ -101,6 +160,8 @@ services:
     restart: unless-stopped
 
 volumes:
+  postgres_data:
+  redis_data:
   qdrant_data:
   rag_data:
   embedding_cache:

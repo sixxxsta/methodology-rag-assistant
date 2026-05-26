@@ -9,17 +9,18 @@
                   │  proxy /api/*
                   ▼
               gateway (Go API) :8090
-                  │
-                  ▼
-              rag (Python) :8100 ──► qdrant
-                  │
+                  ├──► rag :8100 ──► qdrant
+                  ├──► core :8200 ──► postgres
                   └──► inference :8000 (GPU, опционально)
 ```
 
 | Сервис | Порт | Роль |
 |--------|------|------|
 | **web** | 3000 | React / Next.js UI |
-| **gateway** | 8090 | Auth, admin API, прокси к RAG |
+| **gateway** | 8090 | Auth, admin API, прокси к RAG и Core |
+| **core** | 8200 | EdAgent: фазы, эскалации, audit log |
+| **postgres** | 5432 | Реляционные данные EdAgent |
+| **redis** | 6379 | Очереди (Celery, следующие спринты) |
 | **rag** | 8100 | RAG, embeddings, LLM |
 | **qdrant** | 6333 | Векторная БД |
 | **inference** | 8000 | Локальная LLM (`--profile gpu`) |
@@ -29,9 +30,16 @@
 **http://localhost:3000** — чат, вход, админка.
 
 - `/login` — регистрация и вход  
+- `/dashboard` — EdAgent: 5 фаз цикла партнёрства  
+- `/dashboard/competencies` — сбор вакансий HH и матрица компетенций (Фаза 1)  
+- `/dashboard/companies` — поиск компаний, скоринг, шорт-лист (Фаза 2)  
+- `/dashboard/communications` — письма, FAQ, план касаний (Фаза 3)  
+- `/dashboard/outreach` — отправка, ответы, follow-up, соглашения (Фаза 4)  
+- `/dashboard/projects` — генерация ТЗ, утверждение, публикация в каталог (Фаза 5)  
+- `/catalog` — каталог опубликованных проектов для студентов  
 - `/admin` — база знаний (только admin)  
 
-Первый зарегистрированный пользователь — admin. Дополнительно: `ADMIN_EMAILS` в `.env`.
+Админка доступна только пользователю с email из `ADMIN_EMAIL` в `.env`. Все остальные при регистрации получают роль `user`.
 
 ## Запуск
 
@@ -40,21 +48,32 @@ cp .env.example .env
 # JWT_SECRET, RAG_INTERNAL_SECRET — обязательно смените
 
 docker compose up --build -d
-# с GPU:
-docker compose --profile gpu up --build -d
+
+# Чат «Методолог» нужен сервис inference (локальная LLM):
+docker compose --profile gpu up -d inference
+# Дождитесь готовности: docker compose logs -f inference
+# (первый запуск — загрузка модели, до ~20 мин)
 ```
 
 ### Локальная разработка фронтенда
 
 ```bash
 # Терминал 1: backend
-docker compose up qdrant rag gateway -d
+docker compose up postgres core qdrant rag gateway -d
 
 # Терминал 2: Next.js
 cd services/web
 npm install
 npm run dev
 # http://localhost:3000 → API проксируется на :8090
+# Важно: gateway должен быть запущен (см. терминал 1)
+```
+
+Если в Docker-логах `web` пишет `ECONNREFUSED 127.0.0.1:8090` — пересоберите образ (URL API зашивается при `next build`):
+
+```bash
+docker compose build --no-cache web
+docker compose up -d web gateway rag qdrant
 ```
 
 ## Структура
@@ -67,6 +86,7 @@ npm run dev
 └── services/
     ├── web/         # Next.js 15 + React 19 + Tailwind 4
     ├── gateway/     # Go API
+    ├── core/        # EdAgent workflow (FastAPI)
     ├── rag/
     └── inference/
 ```

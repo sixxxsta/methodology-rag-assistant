@@ -116,6 +116,17 @@ func (s *Store) Authenticate(email, password string) (*User, error) {
 	return &User{ID: id, Email: email, Role: role, CreatedAt: t}, nil
 }
 
+func (s *Store) UpdateRole(id int64, role string) (*User, error) {
+	if role != RoleUser && role != RoleAdmin {
+		role = RoleUser
+	}
+	_, err := s.db.Exec(`UPDATE users SET role = ? WHERE id = ?`, role, id)
+	if err != nil {
+		return nil, err
+	}
+	return s.GetByID(id)
+}
+
 func (s *Store) GetByID(id int64) (*User, error) {
 	var email, role, createdAt string
 	err := s.db.QueryRow(

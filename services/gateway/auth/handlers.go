@@ -3,13 +3,12 @@ package auth
 import (
 	"encoding/json"
 	"net/http"
-	"strings"
 )
 
 type Handlers struct {
-	Store        *Store
-	Issuer       *TokenIssuer
-	AdminEmails  map[string]struct{}
+	Store      *Store
+	Issuer     *TokenIssuer
+	AdminEmail string
 }
 
 type registerRequest struct {
@@ -29,14 +28,7 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	role := RoleUser
-	if _, ok := h.AdminEmails[normalizeEmail(req.Email)]; ok {
-		role = RoleAdmin
-	}
-	count, _ := h.Store.CountUsers()
-	if count == 0 {
-		role = RoleAdmin
-	}
+	role := h.roleForEmail(req.Email)
 
 	user, err := h.Store.CreateUser(req.Email, req.Password, role)
 	if err != nil {
@@ -69,6 +61,12 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	user, err = h.syncUserRole(user)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "role sync failed"})
+		return
+	}
+
 	token, err := h.Issuer.Sign(user)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "token error"})
@@ -92,18 +90,27 @@ func (h *Handlers) Me(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "user not found"})
 		return
 	}
+	user, err = h.syncUserRole(user)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "role sync failed"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"user": user})
 }
 
-func ParseAdminEmails(raw string) map[string]struct{} {
-	out := make(map[string]struct{})
-	for _, part := range strings.Split(raw, ",") {
-		e := normalizeEmail(part)
-		if e != "" {
-			out[e] = struct{}{}
-		}
+func (h *Handlers) roleForEmail(email string) string {
+	if h.AdminEmail != "" && normalizeEmail(email) == normalizeEmail(h.AdminEmail) {
+		return RoleAdmin
 	}
-	return out
+	return RoleUser
+}
+
+func (h *Handlers) syncUserRole(user *User) (*User, error) {
+	expected := h.roleForEmail(user.Email)
+	if user.Role == expected {
+		return user, nil
+	}
+	return h.Store.UpdateRole(user.ID, expected)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {

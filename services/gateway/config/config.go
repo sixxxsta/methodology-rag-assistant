@@ -19,8 +19,10 @@ type Config struct {
 	AuthDBPath         string
 	JWTSecret          string
 	JWTTTLHours        int
-	AdminEmails        string
+	AdminEmail         string
 	KnowledgeDir       string
+	CoreServiceURL     string
+	CoreInternalSecret string
 }
 
 func Load() (Config, error) {
@@ -41,8 +43,10 @@ func Load() (Config, error) {
 		AuthDBPath:        envOrDefault("AUTH_DB_PATH", "/app/data/users.db"),
 		JWTSecret:         jwtSecret,
 		JWTTTLHours:       intFromEnv("JWT_TTL_HOURS", 72),
-		AdminEmails:       os.Getenv("ADMIN_EMAILS"),
-		KnowledgeDir:      envOrDefault("KNOWLEDGE_DIR", "/knowledge"),
+		AdminEmail:        resolveAdminEmail(),
+		KnowledgeDir:       envOrDefault("KNOWLEDGE_DIR", "/knowledge"),
+		CoreServiceURL:     strings.TrimRight(envOrDefault("CORE_SERVICE_URL", "http://127.0.0.1:8200"), "/"),
+		CoreInternalSecret: strings.TrimSpace(os.Getenv("CORE_INTERNAL_SECRET")),
 	}, nil
 }
 
@@ -107,4 +111,22 @@ func envOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// resolveAdminEmail returns the single admin account email (ADMIN_EMAIL).
+// Falls back to the first entry in legacy ADMIN_EMAILS for compatibility.
+func resolveAdminEmail() string {
+	if v := strings.TrimSpace(os.Getenv("ADMIN_EMAIL")); v != "" {
+		return strings.ToLower(v)
+	}
+	raw := strings.TrimSpace(os.Getenv("ADMIN_EMAILS"))
+	if raw == "" {
+		return ""
+	}
+	for _, part := range strings.Split(raw, ",") {
+		if e := strings.ToLower(strings.TrimSpace(part)); e != "" {
+			return e
+		}
+	}
+	return ""
 }

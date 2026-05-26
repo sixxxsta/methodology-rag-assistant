@@ -52,7 +52,7 @@ func testServer(t *testing.T) (*HTTPServer, string) {
 		t.Fatal(err)
 	}
 	h := &auth.Handlers{Store: store, Issuer: issuer}
-	srv := NewHTTPServer(&mockRAG{}, h, nil, issuer)
+	srv := NewHTTPServer(&mockRAG{}, h, nil, issuer, "", nil)
 	t.Cleanup(func() { _ = store.Close() })
 	return srv, token
 }
@@ -90,7 +90,7 @@ func TestHTTPServerChatError(t *testing.T) {
 	_ = store
 	token, _ := issuer.Sign(&auth.User{ID: 1, Email: "a@b.c", Role: auth.RoleUser})
 
-	srv := NewHTTPServer(&mockRAG{err: errors.New("down")}, &auth.Handlers{Store: store, Issuer: issuer}, nil, issuer)
+	srv := NewHTTPServer(&mockRAG{err: errors.New("down")}, &auth.Handlers{Store: store, Issuer: issuer}, nil, issuer, "", nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/chat", bytes.NewBufferString(`{"message":"x"}`))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rr := httptest.NewRecorder()

@@ -7,14 +7,17 @@ import (
 
 	"methodology-rag-assistant/admin"
 	"methodology-rag-assistant/auth"
+	"methodology-rag-assistant/core"
 	"methodology-rag-assistant/rag"
 )
 
 type HTTPServer struct {
-	ragClient rag.Service
-	auth      *auth.Handlers
-	admin     *admin.Handlers
-	issuer    *auth.TokenIssuer
+	ragClient  rag.Service
+	auth       *auth.Handlers
+	admin      *admin.Handlers
+	issuer     *auth.TokenIssuer
+	adminEmail string
+	coreProxy  *core.Proxy
 }
 
 func NewHTTPServer(
@@ -22,12 +25,16 @@ func NewHTTPServer(
 	authHandlers *auth.Handlers,
 	adminHandlers *admin.Handlers,
 	issuer *auth.TokenIssuer,
+	adminEmail string,
+	coreProxy *core.Proxy,
 ) *HTTPServer {
 	return &HTTPServer{
-		ragClient: ragClient,
-		auth:      authHandlers,
-		admin:     adminHandlers,
-		issuer:    issuer,
+		ragClient:  ragClient,
+		auth:       authHandlers,
+		admin:      adminHandlers,
+		issuer:     issuer,
+		adminEmail: adminEmail,
+		coreProxy:  coreProxy,
 	}
 }
 
@@ -44,12 +51,18 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.HandleFunc("GET /api/health", s.handleHealth)
 
 	admin := func(h http.HandlerFunc) http.Handler {
-		return authMW(auth.AdminOnly(http.HandlerFunc(h)))
+		return authMW(auth.AdminOnly(s.adminEmail)(http.HandlerFunc(h)))
 	}
 	mux.Handle("GET /api/admin/files", admin(s.admin.ListFiles))
 	mux.Handle("POST /api/admin/files", admin(s.admin.Upload))
 	mux.Handle("DELETE /api/admin/files/{name}", admin(s.admin.Delete))
 	mux.Handle("POST /api/admin/ingest", admin(s.admin.Ingest))
+
+	if s.coreProxy != nil {
+		ed := authMW(s.coreProxy.Handler())
+		mux.Handle("/api/ed/", ed)
+		mux.Handle("/api/ed", ed)
+	}
 
 	return mux
 }

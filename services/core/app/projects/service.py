@@ -1,0 +1,359 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from sqlalchemy.orm import Session
+
+from ..llm_client import generate_text
+from ..models import (
+    Company,
+    Competency,
+    PartnerAgreement,
+    PhaseKey,
+    PhaseRun,
+    PhaseStatus,
+    Project,
+)
+from ..services import ensure_workspace, get_phase_run, log_action
+from .generator import competencies_for_workspace, parse_tz_response, tz_prompt
+
+
+def _project_dict(p: Project, company_name: str | None = None) -> dict:
+    return {
+        "id": p.id,
+        "company_id": p.company_id,
+        "company_name": company_name,
+        "agreement_id": p.agreement_id,
+        "title": p.title,
+        "description": p.description,
+        "spec_markdown": p.spec_markdown,
+        "competencies": p.competencies,
+        "team_size": p.team_size,
+        "duration_weeks": p.duration_weeks,
+        "status": p.status,
+        "catalog_visible": p.catalog_visible,
+        "approved_by": p.approved_by,
+        "approved_at": p.approved_at.isoformat() if p.approved_at else None,
+        "published_at": p.published_at.isoformat() if p.published_at else None,
+        "created_at": p.created_at.isoformat() if p.created_at else None,
+        "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+    }
+
+
+def dashboard(db: Session) -> dict:
+    ws = ensure_workspace(db)
+    partners = (
+        db.query(Company)
+        .filter(Company.workspace_id == ws.id, Company.status == "partner")
+        .order_by(Company.name)
+        .all()
+    )
+    agreements = (
+        db.query(PartnerAgreement)
+        .join(Company, PartnerAgreement.company_id == Company.id)
+        .filter(Company.workspace_id == ws.id)
+        .order_by(PartnerAgreement.created_at.desc())
+        .all()
+    )
+    projects = (
+        db.query(Project)
+        .filter(Project.workspace_id == ws.id)
+        .order_by(Project.updated_at.desc())
+        .all()
+    )
+    company_map = {c.id: c.name for c in partners}
+    for a in agreements:
+        co = db.query(Company).filter(Company.id == a.company_id).one()
+        company_map[co.id] = co.name
+
+    pending_partners: list[dict] = []
+    for agr in agreements:
+        existing = next((p for p in projects if p.agreement_id == agr.id), None)
+        co = db.query(Company).filter(Company.id == agr.company_id).one()
+        pending_partners.append(
+            {
+                "company_id": co.id,
+                "company_name": co.name,
+                "agreement_id": agr.id,
+                "agreement_summary": agr.summary[:200],
+                "project_id": existing.id if existing else None,
+                "project_status": existing.status if existing else None,
+            }
+        )
+
+    published = sum(1 for p in projects if p.catalog_visible)
+    draft = sum(1 for p in projects if p.status == "draft")
+    approved = sum(1 for p in projects if p.status == "approved")
+
+    phase = get_phase_run(db, ws.id, PhaseKey.PROJECTS.value)
+
+    return {
+        "phase_status": phase.status,
+        "phase_progress": phase.progress_pct,
+        "partners_count": len({a.company_id for a in agreements}),
+        "projects_total": len(projects),
+        "projects_draft": draft,
+        "projects_approved": approved,
+        "catalog_published": published,
+        "pending": pending_partners,
+        "projects": [_project_dict(p, company_map.get(p.company_id or 0)) for p in projects],
+    }
+
+
+def generate_project(
+    db: Session,
+    company_id: int,
+    *,
+    actor_email: str,
+    agreement_id: int | None = None,
+) -> dict:
+    ws = ensure_workspace(db)
+    company = (
+        db.query(Company)
+        .filter(Company.workspace_id == ws.id, Company.id == company_id)
+        .one()
+    )
+    agr_q = db.query(PartnerAgreement).filter(PartnerAgreement.company_id == company.id)
+    if agreement_id:
+        agr_q = agr_q.filter(PartnerAgreement.id == agreement_id)
+    agreement = agr_q.order_by(PartnerAgreement.created_at.desc()).first()
+    if not agreement:
+        raise ValueError("no partner agreement for this company")
+
+    comps = (
+        db.query(Competency)
+        .filter(Competency.workspace_id == ws.id)
+        .all()
+    )
+    top_skills = competencies_for_workspace(comps)
+
+    prompt = tz_prompt(
+        company,
+        agreement,
+        industry=ws.industry,
+        top_competencies=top_skills,
+    )
+    raw = generate_text(prompt, context=f"Компания: {company.name}")
+    title, spec, team_size, duration_weeks, comp_csv = parse_tz_response(raw)
+
+    project = (
+        db.query(Project)
+        .filter(
+            Project.workspace_id == ws.id,
+            Project.agreement_id == agreement.id,
+        )
+        .first()
+    )
+    if not project:
+        project = Project(
+            workspace_id=ws.id,
+            company_id=company.id,
+            agreement_id=agreement.id,
+            title=title,
+            status="draft",
+        )
+        db.add(project)
+    else:
+        project.title = title
+
+    project.spec_markdown = spec
+    project.description = spec[:500] if spec else None
+    project.team_size = team_size or 4
+    project.duration_weeks = duration_weeks or 12
+    project.competencies = comp_csv
+    project.status = "draft"
+    project.catalog_visible = False
+    project.approved_by = None
+    project.approved_at = None
+    project.published_at = None
+
+    phase = get_phase_run(db, ws.id, PhaseKey.PROJECTS.value)
+    if phase.status == PhaseStatus.ACTIVE.value and phase.progress_pct < 50:
+        phase.progress_pct = min(50, phase.progress_pct + 20)
+
+    log_action(
+        db,
+        workspace_id=ws.id,
+        actor_email=actor_email,
+        action="projects.generate",
+        entity_id=str(project.id if project.id else company_id),
+    )
+    db.commit()
+    db.refresh(project)
+    return _project_dict(project, company.name)
+
+
+def update_project(
+    db: Session,
+    project_id: int,
+    *,
+    actor_email: str,
+    title: str | None = None,
+    spec_markdown: str | None = None,
+    team_size: int | None = None,
+    duration_weeks: int | None = None,
+    competencies: str | None = None,
+) -> dict:
+    ws = ensure_workspace(db)
+    project = (
+        db.query(Project)
+        .filter(Project.workspace_id == ws.id, Project.id == project_id)
+        .one()
+    )
+    if title is not None:
+        project.title = title
+    if spec_markdown is not None:
+        project.spec_markdown = spec_markdown
+        project.description = spec_markdown[:500]
+    if team_size is not None:
+        project.team_size = team_size
+    if duration_weeks is not None:
+        project.duration_weeks = duration_weeks
+    if competencies is not None:
+        project.competencies = competencies
+
+    log_action(
+        db,
+        workspace_id=ws.id,
+        actor_email=actor_email,
+        action="projects.update",
+        entity_id=str(project_id),
+    )
+    db.commit()
+    db.refresh(project)
+    company_name = None
+    if project.company_id:
+        co = db.query(Company).filter(Company.id == project.company_id).one_or_none()
+        company_name = co.name if co else None
+    return _project_dict(project, company_name)
+
+
+def approve_project(db: Session, project_id: int, *, actor_email: str) -> dict:
+    ws = ensure_workspace(db)
+    project = (
+        db.query(Project)
+        .filter(Project.workspace_id == ws.id, Project.id == project_id)
+        .one()
+    )
+    if not project.spec_markdown:
+        raise ValueError("generate TZ before approval")
+
+    project.status = "approved"
+    project.approved_by = actor_email
+    project.approved_at = datetime.now(timezone.utc)
+
+    phase = get_phase_run(db, ws.id, PhaseKey.PROJECTS.value)
+    if phase.status == PhaseStatus.ACTIVE.value:
+        phase.progress_pct = max(phase.progress_pct, 70)
+
+    log_action(
+        db,
+        workspace_id=ws.id,
+        actor_email=actor_email,
+        action="projects.approve",
+        entity_id=str(project_id),
+    )
+    db.commit()
+    db.refresh(project)
+    company_name = None
+    if project.company_id:
+        co = db.query(Company).filter(Company.id == project.company_id).one_or_none()
+        company_name = co.name if co else None
+    return _project_dict(project, company_name)
+
+
+def publish_to_catalog(db: Session, project_id: int, *, actor_email: str) -> dict:
+    ws = ensure_workspace(db)
+    project = (
+        db.query(Project)
+        .filter(Project.workspace_id == ws.id, Project.id == project_id)
+        .one()
+    )
+    if project.status != "approved":
+        raise ValueError("approve project before publishing")
+
+    project.catalog_visible = True
+    project.published_at = datetime.now(timezone.utc)
+
+    published_count = (
+        db.query(Project)
+        .filter(Project.workspace_id == ws.id, Project.catalog_visible.is_(True))
+        .count()
+    )
+
+    phase = get_phase_run(db, ws.id, PhaseKey.PROJECTS.value)
+    if phase.status == PhaseStatus.ACTIVE.value:
+        phase.progress_pct = min(100, 50 + published_count * 15)
+
+    log_action(
+        db,
+        workspace_id=ws.id,
+        actor_email=actor_email,
+        action="projects.publish",
+        entity_id=str(project_id),
+    )
+    db.commit()
+    db.refresh(project)
+    company_name = None
+    if project.company_id:
+        co = db.query(Company).filter(Company.id == project.company_id).one_or_none()
+        company_name = co.name if co else None
+    return _project_dict(project, company_name)
+
+
+def list_catalog(db: Session) -> list[dict]:
+    ws = ensure_workspace(db)
+    rows = (
+        db.query(Project, Company)
+        .outerjoin(Company, Project.company_id == Company.id)
+        .filter(
+            Project.workspace_id == ws.id,
+            Project.catalog_visible.is_(True),
+        )
+        .order_by(Project.published_at.desc())
+        .all()
+    )
+    out: list[dict] = []
+    for proj, co in rows:
+        item = _project_dict(proj, co.name if co else None)
+        item.pop("spec_markdown", None)
+        out.append(item)
+    return out
+
+
+def get_project(db: Session, project_id: int) -> dict:
+    ws = ensure_workspace(db)
+    project = (
+        db.query(Project)
+        .filter(Project.workspace_id == ws.id, Project.id == project_id)
+        .one()
+    )
+    company_name = None
+    if project.company_id:
+        co = db.query(Company).filter(Company.id == project.company_id).one_or_none()
+        company_name = co.name if co else None
+    return _project_dict(project, company_name)
+
+
+def complete_projects_phase(db: Session, *, actor_email: str) -> dict:
+    ws = ensure_workspace(db)
+    published = (
+        db.query(Project)
+        .filter(Project.workspace_id == ws.id, Project.catalog_visible.is_(True))
+        .count()
+    )
+    if published < 1:
+        raise ValueError("publish at least one project to catalog")
+
+    phase = get_phase_run(db, ws.id, PhaseKey.PROJECTS.value)
+    phase.status = PhaseStatus.COMPLETED.value
+    phase.progress_pct = 100
+
+    log_action(
+        db,
+        workspace_id=ws.id,
+        actor_email=actor_email,
+        action="projects.phase.complete",
+    )
+    db.commit()
+    return {"status": "completed", "catalog_published": published}

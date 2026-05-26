@@ -1,7 +1,8 @@
 "use client";
 
+import type { ReactNode } from "react";
 import Link from "next/link";
-import { LogOut, MessageSquare, Settings, Sparkles } from "lucide-react";
+import { LayoutDashboard, LogOut, MessageSquare, Settings, Sparkles } from "lucide-react";
 import { clearSession, getUser, isAdmin } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
@@ -10,6 +11,17 @@ type Props = {
   onNewChat?: () => void;
   className?: string;
 };
+
+function EdLink({ href, children }: { href: string; children: ReactNode }) {
+  return (
+    <Link
+      href={href}
+      className="rounded-md px-2 py-1.5 text-muted transition hover:bg-surface-2 hover:text-accent"
+    >
+      {children}
+    </Link>
+  );
+}
 
 export function Sidebar({ onNewChat, className }: Props) {
   const router = useRouter();
@@ -75,6 +87,24 @@ export function Sidebar({ onNewChat, className }: Props) {
       </p>
 
       <div className="mt-auto flex flex-col gap-2">
+        <p className="px-1 text-xs font-medium uppercase tracking-wide text-muted">
+          EdAgent
+        </p>
+        <Link
+          href="/dashboard"
+          className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm transition hover:border-accent hover:bg-surface-2"
+        >
+          <LayoutDashboard className="h-4 w-4 shrink-0" />
+          Обзор фаз
+        </Link>
+        <nav className="flex flex-col gap-0.5 pl-1 text-sm">
+          <EdLink href="/dashboard/competencies">1. Компетенции</EdLink>
+          <EdLink href="/dashboard/companies">2. Компании</EdLink>
+          <EdLink href="/dashboard/communications">3. Коммуникации</EdLink>
+          <EdLink href="/dashboard/outreach">4. Outreach</EdLink>
+          <EdLink href="/dashboard/projects">5. Проекты</EdLink>
+          <EdLink href="/catalog">Каталог</EdLink>
+        </nav>
         {onNewChat && (
           <button
             type="button"

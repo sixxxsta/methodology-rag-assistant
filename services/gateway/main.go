@@ -9,6 +9,7 @@ import (
 	"methodology-rag-assistant/api"
 	"methodology-rag-assistant/auth"
 	"methodology-rag-assistant/config"
+	"methodology-rag-assistant/core"
 	"methodology-rag-assistant/rag"
 )
 
@@ -39,16 +40,31 @@ func run() error {
 	ragClient := rag.NewClient(cfg.RAGServiceURL, &http.Client{Timeout: cfg.RAGTimeout}, cfg.RAGInternalSecret)
 
 	authHandlers := &auth.Handlers{
-		Store:       userStore,
-		Issuer:      issuer,
-		AdminEmails: auth.ParseAdminEmails(cfg.AdminEmails),
+		Store:      userStore,
+		Issuer:     issuer,
+		AdminEmail: cfg.AdminEmail,
+	}
+	if cfg.AdminEmail != "" {
+		fmt.Fprintf(os.Stdout, "Admin account: %s\n", cfg.AdminEmail)
+	} else {
+		fmt.Fprintln(os.Stdout, "Warning: ADMIN_EMAIL is not set — admin panel will be unavailable")
 	}
 	adminHandlers := &admin.Handlers{
 		KnowledgeDir: cfg.KnowledgeDir,
 		RAG:          ragClient,
 	}
 
-	server := api.NewHTTPServer(ragClient, authHandlers, adminHandlers, issuer)
+	var coreProxy *core.Proxy
+	if cfg.CoreServiceURL != "" {
+		var err error
+		coreProxy, err = core.NewProxy(cfg.CoreServiceURL, cfg.CoreInternalSecret)
+		if err != nil {
+			return fmt.Errorf("core proxy: %w", err)
+		}
+		fmt.Fprintf(os.Stdout, "Core API proxy → %s (/api/ed/*)\n", cfg.CoreServiceURL)
+	}
+
+	server := api.NewHTTPServer(ragClient, authHandlers, adminHandlers, issuer, cfg.AdminEmail, coreProxy)
 
 	fmt.Fprintf(os.Stdout, "Gateway API listening on %s\n", cfg.HTTPAddr)
 	return http.ListenAndServe(cfg.HTTPAddr, server.Handler())

@@ -1,0 +1,22 @@
+[
+  {
+    "title": "Python-разработчик",
+    "body": "Разработка REST API на Python, FastAPI, PostgreSQL. Git, code review, unit-тесты. Agile, Scrum. Docker — желательно."
+  },
+  {
+    "title": "Аналитик данных",
+    "body": "SQL, Python, pandas, визуализация. Постановка задач для разработки. Коммуникация с бизнесом. Agile."
+  },
+  {
+    "title": "Junior Backend Developer",
+    "body": "Python, Django/FastAPI, REST, Git, Linux. Работа в команде, code review. Базовые знания Docker и CI/CD."
+  },
+  {
+    "title": "Стажёр по разработке",
+    "body": "Студент 3–4 курса. Python, основы веба, Git. Готовность к проектной работе 10–15 ч/нед. Scrum."
+  },
+  {
+    "title": "DevOps инженер (junior)",
+    "body": "Linux, Docker, CI/CD, Git. Python для автоматизации. Мониторинг. Взаимодействие с командами разработки."
+  }
+]
