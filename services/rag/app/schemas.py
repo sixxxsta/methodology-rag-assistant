@@ -37,7 +37,8 @@ class IngestResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
-    llm_provider: str
+    llm_provider_configured: str
+    llm_provider_active: str
     qdrant_collection: str
     knowledge_points: int
     embedding_model: str

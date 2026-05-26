@@ -45,23 +45,41 @@
     └── inference/        # Python (GPU)
 ```
 
+## Сайт
+
+После запуска: **http://localhost:8090** (сервис `gateway`).
+
 ## Запуск
 
 ```bash
 cp .env.example .env
-# Укажите GIGACHAT_CREDENTIALS при LLM_PROVIDER=gigachat
-
 docker compose up --build -d
 ```
 
-Сайт: **http://localhost:8090**
+### Переключение LLM (одна строка в `.env`)
 
-С локальной LLM (NVIDIA):
+| `LLM_PROVIDER` | Когда использовать |
+|----------------|-------------------|
+| `auto` | По умолчанию: GigaChat если есть `GIGACHAT_CREDENTIALS`, иначе локальная модель |
+| `gigachat` | Только API Сбера |
+| `inference` | Только локальная Qwen (нужен GPU) |
+
+**Локальная модель:**
 
 ```bash
 # .env: LLM_PROVIDER=inference
 docker compose --profile gpu up --build -d
 ```
+
+**GigaChat (без GPU):**
+
+```bash
+# .env: LLM_PROVIDER=gigachat
+# GIGACHAT_CREDENTIALS=<base64 client_id:client_secret>
+docker compose up --build -d
+```
+
+После смены провайдера: `docker compose up -d --force-recreate rag`
 
 ## Конфигурация
 
@@ -99,7 +117,9 @@ cd services/gateway && go run .
 
 ## База знаний
 
-Добавьте `.md` в `knowledge/`, затем:
+Подробно: [`knowledge/README.md`](knowledge/README.md).
+
+Кратко: кладите `.md` / `.txt` в `knowledge/` (Agile, Scrum, DevOps, ГОСТ-выжимки, регламенты курса), затем:
 
 ```bash
 curl -X POST http://localhost:8100/ingest

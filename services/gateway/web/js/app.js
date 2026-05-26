@@ -26,10 +26,12 @@ async function checkHealth() {
     if (!res.ok) throw new Error("unhealthy");
     const data = await res.json();
     statusDot.className = "status-dot ok";
-    statusText.textContent = `Онлайн · ${data.knowledge_points ?? 0} фрагментов в базе`;
+    const llm = data.llm_provider_active || data.llm_provider || "—";
+    const pts = data.knowledge_points ?? 0;
+    statusText.textContent = `Онлайн · LLM: ${llm} · ${pts} фрагментов в базе`;
   } catch {
     statusDot.className = "status-dot err";
-    statusText.textContent = "Сервис недоступен — проверьте RAG и Qdrant";
+    statusText.textContent = "RAG загружается… Сайт доступен, чат — через 1–3 мин";
   }
 }
 

@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     chunk_size: int = 800
     chunk_overlap: int = 120
     knowledge_dir: str = "/knowledge"
-    llm_provider: str = "gigachat"
+    llm_provider: str = "auto"
     inference_base_url: str = "http://127.0.0.1:8000"
     inference_timeout_seconds: int = 600
     gigachat_credentials: str = ""
@@ -74,7 +74,7 @@ def get_settings() -> Settings:
         chunk_size=int(os.getenv("CHUNK_SIZE", "800")),
         chunk_overlap=int(os.getenv("CHUNK_OVERLAP", "120")),
         knowledge_dir=os.getenv("KNOWLEDGE_DIR", "/knowledge"),
-        llm_provider=os.getenv("LLM_PROVIDER", "gigachat").strip().lower(),
+        llm_provider=os.getenv("LLM_PROVIDER", "auto").strip().lower(),
         inference_base_url=os.getenv("INFERENCE_BASE_URL", "http://127.0.0.1:8000").rstrip("/"),
         inference_timeout_seconds=int(os.getenv("INFERENCE_TIMEOUT_SECONDS", "600")),
         gigachat_credentials=os.getenv("GIGACHAT_CREDENTIALS", ""),

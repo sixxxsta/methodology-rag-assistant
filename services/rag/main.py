@@ -7,7 +7,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.routes import pipeline, router
+from app.deps import get_pipeline
+from app.routes import router
 
 logging.basicConfig(
     level=logging.INFO,
@@ -37,6 +38,7 @@ app.add_middleware(
 def _wait_for_qdrant(max_attempts: int = 30) -> None:
     import time
 
+    pipeline = get_pipeline()
     for attempt in range(1, max_attempts + 1):
         try:
             pipeline.ensure_ready()
@@ -50,9 +52,15 @@ def _wait_for_qdrant(max_attempts: int = 30) -> None:
 
 @app.on_event("startup")
 async def startup() -> None:
+    pipeline = get_pipeline()
     _wait_for_qdrant()
     count = pipeline.store.count()
-    logger.info("Qdrant collection %s has %d points", settings.qdrant_collection, count)
+    logger.info(
+        "Qdrant %s: %d points, LLM active: %s",
+        settings.qdrant_collection,
+        count,
+        pipeline.llm_provider_active,
+    )
 
     if settings.auto_ingest_on_startup and count == 0:
         knowledge_dir = Path(settings.knowledge_dir).resolve()

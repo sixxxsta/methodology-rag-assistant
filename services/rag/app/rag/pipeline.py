@@ -5,32 +5,13 @@ from pathlib import Path
 
 from ..config import Settings
 from ..llm.base import LLMProvider
-from ..llm.gigachat import GigaChatLLM
-from ..llm.inference import InferenceLLM
+from ..llm.factory import build_llm
 from ..sessions import ChatSessionStore
 from .chunker import chunk_document
 from .embeddings import EmbeddingService
 from .qdrant_store import QdrantStore, RetrievedChunk
 
 logger = logging.getLogger(__name__)
-
-
-def build_llm(settings: Settings) -> LLMProvider:
-    provider = settings.llm_provider
-    if provider == "gigachat":
-        return GigaChatLLM(
-            settings.gigachat_credentials,
-            scope=settings.gigachat_scope,
-            model=settings.gigachat_model,
-            verify_ssl=settings.gigachat_verify_ssl,
-            timeout_seconds=min(settings.inference_timeout_seconds, 120),
-        )
-    if provider == "inference":
-        return InferenceLLM(
-            settings.inference_base_url,
-            settings.inference_timeout_seconds,
-        )
-    raise ValueError(f"unsupported LLM_PROVIDER: {provider}")
 
 
 class RAGPipeline:
@@ -43,8 +24,9 @@ class RAGPipeline:
             api_key=settings.qdrant_api_key,
             vector_size=self.embeddings.vector_size,
         )
-        self.llm = build_llm(settings)
+        self.llm, self.llm_provider_active = build_llm(settings)
         self.sessions = ChatSessionStore(max_messages=20)
+        logger.info("RAG pipeline ready, LLM provider: %s", self.llm_provider_active)
 
     def ensure_ready(self) -> None:
         self.store.ensure_collection()

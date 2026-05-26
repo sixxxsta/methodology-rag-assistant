@@ -1,5 +1,5 @@
-# Микросервисная архитектура — синхронный HTTP, без брокера сообщений.
-# Брокер не нужен: чат — request/response, ingest — при старте или POST /ingest.
+# Микросервисы: gateway (сайт) → rag → qdrant + inference (профиль gpu)
+# LLM_PROVIDER в .env: inference | gigachat | auto
 
 services:
   qdrant:
@@ -9,6 +9,33 @@ services:
       - "${QDRANT_PORT:-6333}:6333"
     volumes:
       - qdrant_data:/qdrant/storage
+    restart: unless-stopped
+
+  inference:
+    profiles: ["gpu"]
+    build:
+      context: ./services/inference
+      dockerfile: Dockerfile
+    image: methodology-inference:latest
+    container_name: methodology-inference
+    env_file: .env
+    ports:
+      - "${INFERENCE_PORT:-8000}:8000"
+    volumes:
+      - inference_cache:/models/hf-cache
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready')"]
+      interval: 20s
+      timeout: 10s
+      retries: 30
+      start_period: 600s
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     restart: unless-stopped
 
   rag:
@@ -25,34 +52,17 @@ services:
       - rag_data:/app/data
       - embedding_cache:/models/hf-cache
     depends_on:
-      - qdrant
+      qdrant:
+        condition: service_started
+      inference:
+        condition: service_healthy
+        required: false
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health')"]
-      interval: 15s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
-    restart: unless-stopped
-
-  inference:
-    profiles: ["gpu"]
-    build:
-      context: ./services/inference
-      dockerfile: Dockerfile
-    image: methodology-inference:latest
-    container_name: methodology-inference
-    env_file: .env
-    ports:
-      - "${INFERENCE_PORT:-8000}:8000"
-    volumes:
-      - inference_cache:/models/hf-cache
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+      interval: 20s
+      timeout: 15s
+      retries: 15
+      start_period: 300s
     restart: unless-stopped
 
   gateway:
@@ -70,7 +80,7 @@ services:
       RAG_SERVICE_URL: http://rag:8100
     depends_on:
       rag:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
 
 volumes:

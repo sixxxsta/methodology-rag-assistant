@@ -6,8 +6,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException
 
 from .config import get_settings
+from .deps import get_pipeline
 from .feedback import FeedbackEntry, FeedbackStore
-from .rag.pipeline import RAGPipeline
 from .schemas import (
     ChatRequest,
     ChatResponse,
@@ -21,16 +21,17 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 settings = get_settings()
-pipeline = RAGPipeline(settings)
 feedback_store = FeedbackStore()
 
 
 @router.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
+    pipeline = get_pipeline()
     pipeline.ensure_ready()
     return HealthResponse(
         status="ok",
-        llm_provider=settings.llm_provider,
+        llm_provider_configured=settings.llm_provider,
+        llm_provider_active=pipeline.llm_provider_active,
         qdrant_collection=settings.qdrant_collection,
         knowledge_points=pipeline.store.count(),
         embedding_model=settings.embedding_model,
@@ -39,6 +40,7 @@ async def health() -> HealthResponse:
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
+    pipeline = get_pipeline()
     try:
         result = await pipeline.chat(
             request.message,
@@ -54,7 +56,7 @@ async def chat(request: ChatRequest) -> ChatResponse:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         logger.exception("chat failed")
-        raise HTTPException(status_code=500, detail="chat failed") from exc
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @router.post("/feedback")
@@ -73,6 +75,7 @@ async def feedback(request: FeedbackRequest) -> dict[str, str]:
 
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest() -> IngestResponse:
+    pipeline = get_pipeline()
     knowledge_dir = Path(settings.knowledge_dir).resolve()
     try:
         stats = pipeline.ingest_directory(knowledge_dir)
