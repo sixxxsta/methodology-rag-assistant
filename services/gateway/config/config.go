@@ -12,10 +12,15 @@ import (
 )
 
 type Config struct {
-	HTTPAddr         string
-	RAGServiceURL    string
-	RAGTimeout       time.Duration
-	StaticDir string
+	HTTPAddr           string
+	RAGServiceURL      string
+	RAGTimeout         time.Duration
+	RAGInternalSecret  string
+	AuthDBPath         string
+	JWTSecret          string
+	JWTTTLHours        int
+	AdminEmails        string
+	KnowledgeDir       string
 }
 
 func Load() (Config, error) {
@@ -23,13 +28,21 @@ func Load() (Config, error) {
 		return Config{}, err
 	}
 
-	ragURL := envOrDefault("RAG_SERVICE_URL", "http://127.0.0.1:8100")
+	jwtSecret := strings.TrimSpace(os.Getenv("JWT_SECRET"))
+	if jwtSecret == "" {
+		return Config{}, fmt.Errorf("JWT_SECRET is required")
+	}
 
 	return Config{
-		HTTPAddr:      envOrDefault("APP_HTTP_ADDR", ":8090"),
-		RAGServiceURL: strings.TrimRight(ragURL, "/"),
-		RAGTimeout:    durationFromEnv("RAG_TIMEOUT_SECONDS", 120),
-		StaticDir:     envOrDefault("STATIC_DIR", "web"),
+		HTTPAddr:          envOrDefault("APP_HTTP_ADDR", ":8090"),
+		RAGServiceURL:     strings.TrimRight(envOrDefault("RAG_SERVICE_URL", "http://127.0.0.1:8100"), "/"),
+		RAGTimeout:        durationFromEnv("RAG_TIMEOUT_SECONDS", 120),
+		RAGInternalSecret: strings.TrimSpace(os.Getenv("RAG_INTERNAL_SECRET")),
+		AuthDBPath:        envOrDefault("AUTH_DB_PATH", "/app/data/users.db"),
+		JWTSecret:         jwtSecret,
+		JWTTTLHours:       intFromEnv("JWT_TTL_HOURS", 72),
+		AdminEmails:       os.Getenv("ADMIN_EMAILS"),
+		KnowledgeDir:      envOrDefault("KNOWLEDGE_DIR", "/knowledge"),
 	}, nil
 }
 
@@ -75,6 +88,18 @@ func durationFromEnv(key string, defaultSeconds int) time.Duration {
 		return time.Duration(defaultSeconds) * time.Second
 	}
 	return time.Duration(parsed) * time.Second
+}
+
+func intFromEnv(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return fallback
+	}
+	return parsed
 }
 
 func envOrDefault(key, fallback string) string {

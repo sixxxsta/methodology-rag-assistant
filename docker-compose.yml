@@ -1,5 +1,4 @@
-# Микросервисы: gateway (сайт) → rag → qdrant + inference (профиль gpu)
-# LLM_PROVIDER в .env: inference | gigachat | auto
+# Микросервисы: web (Next.js) → gateway (API) → rag → qdrant + inference (gpu)
 
 services:
   qdrant:
@@ -24,7 +23,6 @@ services:
     volumes:
       - inference_cache:/models/hf-cache
     healthcheck:
-      # 503 на /ready = модель ещё грузится; 200 = можно генерировать
       test:
         [
           "CMD",
@@ -59,11 +57,7 @@ services:
       - rag_data:/app/data
       - embedding_cache:/models/hf-cache
     depends_on:
-      qdrant:
-        condition: service_started
-      inference:
-        condition: service_started
-        required: false
+      - qdrant
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health')"]
       interval: 20s
@@ -78,16 +72,32 @@ services:
       dockerfile: Dockerfile
     image: methodology-gateway:latest
     container_name: methodology-gateway
-    command: ["serve"]
     env_file: .env
     ports:
       - "${GATEWAY_PORT:-8090}:8090"
     environment:
-      STATIC_DIR: /app/web
       RAG_SERVICE_URL: http://rag:8100
+      KNOWLEDGE_DIR: /knowledge
+      AUTH_DB_PATH: /app/data/users.db
+    volumes:
+      - ./knowledge:/knowledge
+      - gateway_data:/app/data
     depends_on:
-      rag:
-        condition: service_started
+      - rag
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ./services/web
+      dockerfile: Dockerfile
+    image: methodology-web:latest
+    container_name: methodology-web
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    environment:
+      API_INTERNAL_URL: http://gateway:8090
+    depends_on:
+      - gateway
     restart: unless-stopped
 
 volumes:
@@ -95,3 +105,4 @@ volumes:
   rag_data:
   embedding_cache:
   inference_cache:
+  gateway_data:

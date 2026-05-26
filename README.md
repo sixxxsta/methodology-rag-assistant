@@ -2,127 +2,87 @@
 
 > Канал куратора: [Telegram](https://t.me/+Xqp0SQjGmVA1ODgy)
 
-## Микросервисная архитектура
+## Архитектура
 
 ```
-                    ┌─────────────┐
-  Браузер ─────────►│   gateway   │ :8090  (Go — UI + API)
-                    └──────┬──────┘
-                           │ HTTP
-                    ┌──────▼──────┐
-                    │     rag     │ :8100  (Python — RAG, сессии, feedback)
-                    └──┬──────┬───┘
-                       │      │
-              ┌────────▼──┐   │ HTTP (LLM_PROVIDER=inference)
-              │  qdrant   │   └──────────► ┌────────────┐
-              └───────────┘                │ inference  │ :8000 (GPU, опционально)
-                                           └────────────┘
+  Браузер ──► web (Next.js) :3000
+                  │  proxy /api/*
+                  ▼
+              gateway (Go API) :8090
+                  │
+                  ▼
+              rag (Python) :8100 ──► qdrant
+                  │
+                  └──► inference :8000 (GPU, опционально)
 ```
 
-| Сервис | Роль |
-|--------|------|
-| **gateway** | Статика, `/api/chat`, `/api/feedback` |
-| **rag** | Embeddings, Qdrant, RAG, GigaChat или inference |
-| **qdrant** | Векторная БД |
-| **inference** | Локальная LLM (профиль `gpu`) |
-
-### Нужен ли брокер сообщений?
-
-**Нет.** Все взаимодействия — синхронный HTTP (запрос → ответ). Чат не требует очередей; ingest выполняется при старте RAG или через `POST /ingest`. RabbitMQ/Kafka добавили бы сложность без выгоды на текущем масштабе.
-
-Брокер понадобится, если появятся: асинхронная переиндексация больших корпусов, фоновые отчёты, event-driven аналитика.
-
-## Структура проекта
-
-```
-.
-├── .env.example          # единый конфиг
-├── docker-compose.yml
-├── knowledge/            # база знаний (общий том)
-└── services/
-    ├── gateway/          # Go
-    ├── rag/              # Python
-    └── inference/        # Python (GPU)
-```
+| Сервис | Порт | Роль |
+|--------|------|------|
+| **web** | 3000 | React / Next.js UI |
+| **gateway** | 8090 | Auth, admin API, прокси к RAG |
+| **rag** | 8100 | RAG, embeddings, LLM |
+| **qdrant** | 6333 | Векторная БД |
+| **inference** | 8000 | Локальная LLM (`--profile gpu`) |
 
 ## Сайт
 
-После запуска: **http://localhost:8090** (сервис `gateway`).
+**http://localhost:3000** — чат, вход, админка.
+
+- `/login` — регистрация и вход  
+- `/admin` — база знаний (только admin)  
+
+Первый зарегистрированный пользователь — admin. Дополнительно: `ADMIN_EMAILS` в `.env`.
 
 ## Запуск
 
 ```bash
 cp .env.example .env
+# JWT_SECRET, RAG_INTERNAL_SECRET — обязательно смените
+
 docker compose up --build -d
-```
-
-### Переключение LLM (одна строка в `.env`)
-
-| `LLM_PROVIDER` | Когда использовать |
-|----------------|-------------------|
-| `auto` | По умолчанию: GigaChat если есть `GIGACHAT_CREDENTIALS`, иначе локальная модель |
-| `gigachat` | Только API Сбера |
-| `inference` | Только локальная Qwen (нужен GPU) |
-
-**Локальная модель:**
-
-```bash
-# .env: LLM_PROVIDER=inference
+# с GPU:
 docker compose --profile gpu up --build -d
 ```
 
-Первый запуск inference: в логах много `GET /ready 503` — **это нормально** (модель качается с HuggingFace). Дождитесь строки `Inference READY: модель загружена` (5–20 мин). Сайт **http://localhost:8090** доступен раньше; чат заработает после загрузки RAG (embeddings) и inference.
-
-**GigaChat (без GPU):**
+### Локальная разработка фронтенда
 
 ```bash
-# .env: LLM_PROVIDER=gigachat
-# GIGACHAT_CREDENTIALS=<base64 client_id:client_secret>
-docker compose up --build -d
+# Терминал 1: backend
+docker compose up qdrant rag gateway -d
+
+# Терминал 2: Next.js
+cd services/web
+npm install
+npm run dev
+# http://localhost:3000 → API проксируется на :8090
 ```
 
-После смены провайдера: `docker compose up -d --force-recreate rag`
+## Структура
 
-## Конфигурация
-
-Один файл **`.env`** в корне — все сервисы читают его через `env_file: .env` в Compose.
-
-Ключевые переменные:
-
-| Переменная | Описание |
-|------------|----------|
-| `LLM_PROVIDER` | `gigachat` или `inference` |
-| `GIGACHAT_CREDENTIALS` | Base64 `client_id:client_secret` |
-| `QDRANT_URL` | В Docker: `http://qdrant:6333` |
-| `KNOWLEDGE_DIR` | В Docker: `/knowledge` |
-
-## API (gateway)
-
-- `POST /api/chat` — диалог с RAG
-- `POST /api/feedback` — оценка ответа
-- `GET /api/health` — статус RAG/Qdrant
-
-Прямой доступ к RAG (отладка): `http://localhost:8100/chat`, `/ingest`, `/health`.
-
-## Локальная разработка
-
-```bash
-# Qdrant
-docker run -p 6333:6333 qdrant/qdrant:v1.15.1
-
-# RAG (из корня репозитория, подхватит .env)
-cd services/rag && pip install -r requirements.txt && uvicorn main:app --port 8100
-
-# Gateway
-cd services/gateway && go run . 
 ```
+.
+├── .env
+├── docker-compose.yml
+├── knowledge/
+└── services/
+    ├── web/         # Next.js 15 + React 19 + Tailwind 4
+    ├── gateway/     # Go API
+    ├── rag/
+    └── inference/
+```
+
+## LLM
+
+| `LLM_PROVIDER` | Режим |
+|----------------|--------|
+| `auto` | GigaChat если есть credentials, иначе inference |
+| `gigachat` | API Сбера |
+| `inference` | Локальная Qwen + `--profile gpu` |
 
 ## База знаний
 
-Подробно: [`knowledge/README.md`](knowledge/README.md).
+См. [`knowledge/README.md`](knowledge/README.md). Админка: загрузка файлов → «Переиндексировать RAG».
 
-Кратко: кладите `.md` / `.txt` в `knowledge/` (Agile, Scrum, DevOps, ГОСТ-выжимки, регламенты курса), затем:
+## Переменные
 
-```bash
-curl -X POST http://localhost:8100/ingest
-```
+Единый `.env` — см. [`.env.example`](.env.example).

@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     rag_http_port: int = 8100
     auto_ingest_on_startup: bool = True
     cors_origins: str = "*"
+    rag_internal_secret: str = ""
 
 
 @lru_cache(maxsize=1)
@@ -89,4 +90,5 @@ def get_settings() -> Settings:
         rag_http_port=int(os.getenv("RAG_HTTP_PORT", "8100")),
         auto_ingest_on_startup=os.getenv("AUTO_INGEST_ON_STARTUP", "true").lower() in {"1", "true", "yes"},
         cors_origins=os.getenv("CORS_ORIGINS", "*"),
+        rag_internal_secret=os.getenv("RAG_INTERNAL_SECRET", ""),
     )

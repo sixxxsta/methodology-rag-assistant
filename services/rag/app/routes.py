@@ -3,7 +3,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
+
+from .security import verify_internal_key
 
 from .config import get_settings
 from .deps import get_pipeline
@@ -73,7 +75,7 @@ async def feedback(request: FeedbackRequest) -> dict[str, str]:
     return {"status": "ok"}
 
 
-@router.post("/ingest", response_model=IngestResponse)
+@router.post("/ingest", response_model=IngestResponse, dependencies=[Depends(verify_internal_key)])
 async def ingest() -> IngestResponse:
     pipeline = get_pipeline()
     knowledge_dir = Path(settings.knowledge_dir).resolve()

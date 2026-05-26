@@ -18,18 +18,28 @@ type Service interface {
 	Chat(ctx context.Context, message, sessionID, language string) (ChatResult, error)
 	Feedback(ctx context.Context, payload FeedbackPayload) error
 	Health(ctx context.Context) (map[string]any, error)
+	Ingest(ctx context.Context) (IngestResult, error)
 }
 
 type Client struct {
-	baseURL    string
-	httpClient HTTPDoer
+	baseURL        string
+	httpClient     HTTPDoer
+	internalSecret string
 }
 
-func NewClient(baseURL string, httpClient HTTPDoer) *Client {
+func NewClient(baseURL string, httpClient HTTPDoer, internalSecret string) *Client {
 	return &Client{
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		httpClient: httpClient,
+		baseURL:        strings.TrimRight(baseURL, "/"),
+		httpClient:     httpClient,
+		internalSecret: internalSecret,
 	}
+}
+
+type IngestResult struct {
+	Files        int    `json:"files"`
+	Chunks       int    `json:"chunks"`
+	Collection   string `json:"collection"`
+	TotalPoints  int    `json:"total_points"`
 }
 
 type Source struct {
@@ -119,6 +129,36 @@ func (c *Client) Feedback(ctx context.Context, payload FeedbackPayload) error {
 		return fmt.Errorf("rag feedback returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 	}
 	return nil
+}
+
+func (c *Client) Ingest(ctx context.Context) (IngestResult, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/ingest", nil)
+	if err != nil {
+		return IngestResult{}, err
+	}
+	if c.internalSecret != "" {
+		req.Header.Set("X-RAG-Internal-Key", c.internalSecret)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return IngestResult{}, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return IngestResult{}, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return IngestResult{}, fmt.Errorf("ingest returned %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	}
+
+	var parsed IngestResult
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return IngestResult{}, err
+	}
+	return parsed, nil
 }
 
 func (c *Client) Health(ctx context.Context) (map[string]any, error) {

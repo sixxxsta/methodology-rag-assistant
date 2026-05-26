@@ -21,6 +21,10 @@ venv/
 
 # Data & model caches
 services/rag/data/
+services/gateway/data/
+services/web/node_modules/
+services/web/.next/
+gateway_data/
 services/inference/model-cache/
 embedding_cache/
 inference_cache/

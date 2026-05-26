@@ -6,14 +6,13 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o rag-api .
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o gateway .
 
 FROM alpine:3.22
 
 WORKDIR /app
-COPY --from=builder /app/rag-api /app/rag-api
-COPY --from=builder /app/web /app/web
+COPY --from=builder /app/gateway /app/gateway
 
 EXPOSE 8090
 
-ENTRYPOINT ["/app/rag-api"]
+ENTRYPOINT ["/app/gateway"]

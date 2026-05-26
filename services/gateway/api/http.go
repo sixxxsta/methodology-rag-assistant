@@ -3,28 +3,54 @@ package api
 import (
 	"encoding/json"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 
+	"methodology-rag-assistant/admin"
+	"methodology-rag-assistant/auth"
 	"methodology-rag-assistant/rag"
 )
 
 type HTTPServer struct {
 	ragClient rag.Service
-	staticDir string
+	auth      *auth.Handlers
+	admin     *admin.Handlers
+	issuer    *auth.TokenIssuer
 }
 
-func NewHTTPServer(ragClient rag.Service, staticDir string) *HTTPServer {
-	return &HTTPServer{ragClient: ragClient, staticDir: staticDir}
+func NewHTTPServer(
+	ragClient rag.Service,
+	authHandlers *auth.Handlers,
+	adminHandlers *admin.Handlers,
+	issuer *auth.TokenIssuer,
+) *HTTPServer {
+	return &HTTPServer{
+		ragClient: ragClient,
+		auth:      authHandlers,
+		admin:     adminHandlers,
+		issuer:    issuer,
+	}
 }
 
 func (s *HTTPServer) Handler() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/chat", s.handleChat)
-	mux.HandleFunc("POST /api/feedback", s.handleFeedback)
+
+	mux.HandleFunc("POST /api/auth/register", s.auth.Register)
+	mux.HandleFunc("POST /api/auth/login", s.auth.Login)
+
+	authMW := auth.Middleware(s.issuer)
+	mux.Handle("GET /api/auth/me", authMW(http.HandlerFunc(s.auth.Me)))
+	mux.Handle("POST /api/chat", authMW(http.HandlerFunc(s.handleChat)))
+	mux.Handle("POST /api/feedback", authMW(http.HandlerFunc(s.handleFeedback)))
 	mux.HandleFunc("GET /api/health", s.handleHealth)
-	mux.Handle("/", s.staticHandler())
+
+	admin := func(h http.HandlerFunc) http.Handler {
+		return authMW(auth.AdminOnly(http.HandlerFunc(h)))
+	}
+	mux.Handle("GET /api/admin/files", admin(s.admin.ListFiles))
+	mux.Handle("POST /api/admin/files", admin(s.admin.Upload))
+	mux.Handle("DELETE /api/admin/files/{name}", admin(s.admin.Delete))
+	mux.Handle("POST /api/admin/ingest", admin(s.admin.Ingest))
+
 	return mux
 }
 
@@ -109,28 +135,6 @@ func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, data)
-}
-
-func (s *HTTPServer) staticHandler() http.Handler {
-	dir := s.staticDir
-	if _, err := os.Stat(dir); err != nil {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.NotFound(w, r)
-		})
-	}
-
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			http.ServeFile(w, r, filepath.Join(dir, "index.html"))
-			return
-		}
-		path := filepath.Join(dir, filepath.Clean(r.URL.Path))
-		if _, err := os.Stat(path); err == nil {
-			http.ServeFile(w, r, path)
-			return
-		}
-		http.ServeFile(w, r, filepath.Join(dir, "index.html"))
-	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
