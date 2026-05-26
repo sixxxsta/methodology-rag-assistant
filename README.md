@@ -1,65 +1,106 @@
-# Minimal Go LLM Backend (via Python Inference API)
+# Методолог — RAG-ассистент по проектной методологии
 
-This project provides a minimal, production-ready Go foundation for LLM integration via interface-driven design.
+> Канал куратора: [Telegram](https://t.me/+Xqp0SQjGmVA1ODgy)
 
-## Architecture
-
-- `llm`: provider-agnostic interface and HTTP inference implementation
-- `api`: CLI adapter for user input/output
-- `config`: environment-based configuration
-
-`main.go` wires dependencies using dependency injection.
-
-## Environment variables
-
-- `INFERENCE_BASE_URL` (required): Base URL of Python inference server (example: `http://127.0.0.1:8000`)
-- `INFERENCE_TIMEOUT_SECONDS` (optional, default `600`): timeout for Go -> inference `/generate` calls
-- `APP_HTTP_ADDR` (optional, default `:8090`)
-
-The app auto-loads variables from `.env` (if the file exists).
-
-Model serving is delegated to `inference_server` (Python FastAPI service), so Go backend is not coupled to model/provider details.
-
-## Stages
-
-### Stage 1 (now): no Docker for model
-
-- Go backend runs locally
-- Python inference server runs locally (`inference_server`)
-- Docker image should not contain model/data/weights
-
-### Stage 2: Docker only for Go API
-
-- Go API runs in Docker
-- Inference server remains local or separate service
-
-## Run
+## Микросервисная архитектура
 
 ```
+                    ┌─────────────┐
+  Браузер ─────────►│   gateway   │ :8090  (Go — UI + API)
+                    └──────┬──────┘
+                           │ HTTP
+                    ┌──────▼──────┐
+                    │     rag     │ :8100  (Python — RAG, сессии, feedback)
+                    └──┬──────┬───┘
+                       │      │
+              ┌────────▼──┐   │ HTTP (LLM_PROVIDER=inference)
+              │  qdrant   │   └──────────► ┌────────────┐
+              └───────────┘                │ inference  │ :8000 (GPU, опционально)
+                                           └────────────┘
+```
 
-Request example:
+| Сервис | Роль |
+|--------|------|
+| **gateway** | Статика, `/api/chat`, `/api/feedback` |
+| **rag** | Embeddings, Qdrant, RAG, GigaChat или inference |
+| **qdrant** | Векторная БД |
+| **inference** | Локальная LLM (профиль `gpu`) |
+
+### Нужен ли брокер сообщений?
+
+**Нет.** Все взаимодействия — синхронный HTTP (запрос → ответ). Чат не требует очередей; ingest выполняется при старте RAG или через `POST /ingest`. RabbitMQ/Kafka добавили бы сложность без выгоды на текущем масштабе.
+
+Брокер понадобится, если появятся: асинхронная переиндексация больших корпусов, фоновые отчёты, event-driven аналитика.
+
+## Структура проекта
+
+```
+.
+├── .env.example          # единый конфиг
+├── docker-compose.yml
+├── knowledge/            # база знаний (общий том)
+└── services/
+    ├── gateway/          # Go
+    ├── rag/              # Python
+    └── inference/        # Python (GPU)
+```
+
+## Запуск
 
 ```bash
-curl -X POST http://localhost:8090/generate \
-  -H "Content-Type: application/json" \
-  -d "{\"prompt\":\"Explain Scrum roles\"}"
+cp .env.example .env
+# Укажите GIGACHAT_CREDENTIALS при LLM_PROVIDER=gigachat
+
+docker compose up --build -d
 ```
 
-If this fails, start `inference_server` first, then run this backend.
+Сайт: **http://localhost:8090**
 
-If first `POST /generate` times out, increase `INFERENCE_TIMEOUT_SECONDS` (initial model download/load can take several minutes).
-
-## Docker Compose (Go + Inference in one command)
-
-Prepare env file for inference service:
-
-Start both services:
+С локальной LLM (NVIDIA):
 
 ```bash
-docker compose up --build
+# .env: LLM_PROVIDER=inference
+docker compose --profile gpu up --build -d
 ```
 
-Services:
+## Конфигурация
 
-- Go API: `http://localhost:8090`
-- Inference server: `http://localhost:8000`
+Один файл **`.env`** в корне — все сервисы читают его через `env_file: .env` в Compose.
+
+Ключевые переменные:
+
+| Переменная | Описание |
+|------------|----------|
+| `LLM_PROVIDER` | `gigachat` или `inference` |
+| `GIGACHAT_CREDENTIALS` | Base64 `client_id:client_secret` |
+| `QDRANT_URL` | В Docker: `http://qdrant:6333` |
+| `KNOWLEDGE_DIR` | В Docker: `/knowledge` |
+
+## API (gateway)
+
+- `POST /api/chat` — диалог с RAG
+- `POST /api/feedback` — оценка ответа
+- `GET /api/health` — статус RAG/Qdrant
+
+Прямой доступ к RAG (отладка): `http://localhost:8100/chat`, `/ingest`, `/health`.
+
+## Локальная разработка
+
+```bash
+# Qdrant
+docker run -p 6333:6333 qdrant/qdrant:v1.15.1
+
+# RAG (из корня репозитория, подхватит .env)
+cd services/rag && pip install -r requirements.txt && uvicorn main:app --port 8100
+
+# Gateway
+cd services/gateway && go run . 
+```
+
+## База знаний
+
+Добавьте `.md` в `knowledge/`, затем:
+
+```bash
+curl -X POST http://localhost:8100/ingest
+```

@@ -3,9 +3,7 @@
 !.env.example
 
 # Go
-bin/
-dist/
-tmp/
+services/gateway/bin/
 *.test
 *.out
 coverage.out
@@ -13,16 +11,17 @@ coverage.out
 # Python
 __pycache__/
 *.py[cod]
-*.pyo
-*.pyd
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
 .venv/
 venv/
+.pytest_cache/
+.mypy_cache/
 
-# VS Code
+# IDE
 .vscode/
 
-# Docker / local caches
-inference_server/model-cache/
+# Data & model caches
+services/rag/data/
+services/inference/model-cache/
+embedding_cache/
+inference_cache/
+qdrant_data/

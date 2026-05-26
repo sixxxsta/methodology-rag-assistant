@@ -12,6 +12,7 @@ FROM alpine:3.22
 
 WORKDIR /app
 COPY --from=builder /app/rag-api /app/rag-api
+COPY --from=builder /app/web /app/web
 
 EXPOSE 8090
 

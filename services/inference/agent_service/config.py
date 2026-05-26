@@ -8,24 +8,27 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
+def _find_root_env() -> Path | None:
+    start = Path(__file__).resolve()
+    for parent in [start, *start.parents]:
+        if (parent / "docker-compose.yml").exists() and (parent / ".env").exists():
+            return parent / ".env"
+        if parent == parent.parent:
+            break
+    cwd_env = Path.cwd() / ".env"
+    return cwd_env if cwd_env.exists() else None
+
+
 def _load_env_file() -> None:
-    current_dir = Path(__file__).resolve().parents[1]
-    server_env = current_dir / ".env"
-    root_env = current_dir.parent / ".env"
-
-    if server_env.exists():
-        load_dotenv(server_env, override=False)
-        return
-
-    if root_env.exists():
-        load_dotenv(root_env, override=False)
+    env_path = _find_root_env()
+    if env_path:
+        load_dotenv(env_path, override=False)
 
 
-def _to_bool(value: str, default: bool) -> bool:
+def _to_bool(value: str | None, default: bool) -> bool:
     if value is None:
         return default
-    normalized = value.strip().lower()
-    return normalized in {"1", "true", "yes", "on"}
+    return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -50,7 +53,7 @@ def get_settings() -> Settings:
         model_name=os.getenv("MODEL_NAME", "Qwen/Qwen2.5-3B-Instruct"),
         use_4bit=_to_bool(os.getenv("USE_4BIT"), True),
         min_new_tokens=int(os.getenv("MIN_NEW_TOKENS", "180")),
-        max_new_tokens=int(os.getenv("MAX_NEW_TOKENS", "200")),
+        max_new_tokens=int(os.getenv("MAX_NEW_TOKENS", "700")),
         temperature=float(os.getenv("TEMPERATURE", "0.7")),
         top_p=float(os.getenv("TOP_P", "0.9")),
         repetition_penalty=float(os.getenv("REPETITION_PENALTY", "1.05")),
@@ -58,6 +61,6 @@ def get_settings() -> Settings:
         response_language=os.getenv("RESPONSE_LANGUAGE", "auto"),
         system_prompt=os.getenv(
             "SYSTEM_PROMPT",
-            "You are a helpful technical assistant.",
+            "Ты — методологический ментор для студенческих проектных команд.",
         ),
     )
