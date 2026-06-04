@@ -22,7 +22,8 @@ from .service import (
 )
 from .scoring import get_scoring_weights_public, update_scoring_weights
 from .service import _rescore_workspace
-from ..services import ensure_workspace, log_action
+from ..cycles.service import get_work_context
+from ..services import log_action
 
 router = APIRouter(prefix="/companies", tags=["companies"])
 
@@ -82,9 +83,9 @@ def scoring_weights_patch(
         weights = update_scoring_weights(body.model_dump(exclude_unset=True))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    ws = ensure_workspace(db)
-    count = _rescore_workspace(db, ws.id)
-    log_action(db, workspace_id=ws.id, actor_email=user["email"], action="companies.scoring_weights")
+    ctx = get_work_context(db)
+    count = _rescore_workspace(db, ctx.cycle_id)
+    log_action(db, workspace_id=ctx.workspace_id, actor_email=user["email"], action="companies.scoring_weights")
     return {"weights": weights, "rescored": count}
 
 
@@ -177,9 +178,9 @@ def rescore(
     db: Session = Depends(get_db),
     user: Annotated[dict[str, str], Depends(require_curator)] = None,
 ):
-    ws = ensure_workspace(db)
-    count = _rescore_workspace(db, ws.id)
-    log_action(db, workspace_id=ws.id, actor_email=user["email"], action="companies.rescore")
+    ctx = get_work_context(db)
+    count = _rescore_workspace(db, ctx.cycle_id)
+    log_action(db, workspace_id=ctx.workspace_id, actor_email=user["email"], action="companies.rescore")
     return {"rescored": count}
 
 

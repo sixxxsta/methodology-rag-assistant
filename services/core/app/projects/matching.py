@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from ..models import Company, Project, StudentProfile
-from ..services import ensure_workspace
+from ..cycles.service import get_work_context
 from .enrollment import active_enrollment_count
 from .service import _catalog_meta, _project_dict
 
@@ -50,14 +50,16 @@ def get_student_profile(db: Session, student_email: str) -> dict | None:
 
 
 def recommend_projects(db: Session, *, student_email: str, limit: int = 10) -> list[dict]:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     profile = get_student_profile(db, student_email)
     student_skills = _parse_skills(profile["skills"] if profile else None)
 
     rows = (
         db.query(Project, Company)
         .outerjoin(Company, Project.company_id == Company.id)
-        .filter(Project.workspace_id == ws.id, Project.catalog_visible.is_(True))
+        .filter(Project.catalog_visible.is_(True))
         .all()
     )
 

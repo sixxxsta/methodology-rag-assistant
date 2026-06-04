@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..models import Communication, CommunicationOutcome, Company
-from ..services import ensure_workspace
+from ..cycles.service import get_work_context
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +28,9 @@ def _build_instruction(company: Company | None, comm: Communication) -> str:
 
 def export_training_jsonl(db: Session, *, output_dir: Path | None = None) -> dict[str, Any]:
     settings = get_settings()
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     out_dir = output_dir or Path(settings.qlora_dataset_dir)
     if not out_dir.is_absolute():
         out_dir = Path(__file__).resolve().parents[2] / out_dir
@@ -38,7 +40,7 @@ def export_training_jsonl(db: Session, *, output_dir: Path | None = None) -> dic
     rows = (
         db.query(CommunicationOutcome)
         .filter(
-            CommunicationOutcome.workspace_id == ws.id,
+            CommunicationOutcome.cycle_id == cid,
             CommunicationOutcome.outcome == "success",
             CommunicationOutcome.communication_id.isnot(None),
         )

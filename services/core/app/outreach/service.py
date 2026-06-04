@@ -19,12 +19,10 @@ from ..models import (
     StudentProfile,
     TouchPoint,
 )
+from ..cycles.service import get_work_context, get_phase_run, unlock_next_phase
 from ..services import (
     create_escalation,
-    ensure_workspace,
-    get_phase_run,
     log_action,
-    unlock_next_phase,
     update_phase,
 )
 from ..config import get_settings
@@ -54,12 +52,14 @@ def _comm_out(comm: Communication, company: Company) -> dict:
 
 
 def dashboard(db: Session) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     approved = (
         db.query(Communication)
         .join(Company, Communication.company_id == Company.id)
         .filter(
-            Company.workspace_id == ws.id,
+            Company.cycle_id == cid,
             Communication.status == "approved",
             Communication.comm_type == "letter",
         )
@@ -73,7 +73,7 @@ def dashboard(db: Session) -> dict:
     responses = (
         db.query(Interaction)
         .join(Company, Interaction.company_id == Company.id)
-        .filter(Company.workspace_id == ws.id, Interaction.direction == "inbound")
+        .filter(Company.cycle_id == cid, Interaction.direction == "inbound")
         .order_by(Interaction.created_at.desc())
         .limit(50)
         .all()
@@ -84,7 +84,7 @@ def dashboard(db: Session) -> dict:
     companies = (
         db.query(Company)
         .filter(
-            Company.workspace_id == ws.id,
+            Company.cycle_id == cid,
             Company.status != "rejected",
         )
         .order_by(Company.in_shortlist.desc(), Company.score.desc().nullslast())
@@ -152,7 +152,9 @@ def send_letter(
     if comm.status != "approved":
         raise ValueError("letter must be approved before send")
     company = db.query(Company).filter(Company.id == comm.company_id).one()
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
 
     if not comm.tracking_token:
         comm.tracking_token = new_tracking_token()
@@ -221,7 +223,7 @@ def send_letter(
         db.query(Communication)
         .join(Company, Communication.company_id == Company.id)
         .filter(
-            Company.workspace_id == ws.id,
+            Company.cycle_id == cid,
             Communication.delivery_status.in_(("sent", "sent_manual", "delivered", "opened")),
         )
         .count()
@@ -291,7 +293,9 @@ def send_followup(db: Session, touch_id: int, *, actor_email: str) -> dict:
 
     tp = db.query(TouchPoint).filter(TouchPoint.id == touch_id).one()
     company = db.query(Company).filter(Company.id == tp.company_id).one()
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     settings = get_settings()
 
     prompt = f"""Напиши короткое follow-up письмо (напоминание) для {company.name}.
@@ -327,7 +331,9 @@ def send_followup(db: Session, touch_id: int, *, actor_email: str) -> dict:
 
 
 def process_due_followups_auto(db: Session) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     due = _due_touchpoints(db, ws.id)
     sent: list[int] = []
     errors: list[str] = []
@@ -349,10 +355,12 @@ def record_inbound(
     body: str,
     auto_respond: bool = True,
 ) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     company = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.id == company_id)
+        .filter(Company.cycle_id == cid, Company.id == company_id)
         .one_or_none()
     )
     if not company:
@@ -394,7 +402,7 @@ def record_inbound(
     db.flush()
 
     if classification in ("interest", "meeting_request"):
-        _escalation_4(db, ws.id, company.name, classification)
+        _escalation_4(db, ws.id, cid, company.name, classification)
 
     if classification == "reject":
         record_outcome(
@@ -433,11 +441,11 @@ def record_inbound(
     }
 
 
-def _escalation_4(db: Session, workspace_id: int, company_name: str, kind: str) -> None:
+def _escalation_4(db: Session, workspace_id: int, cycle_id: int, company_name: str, kind: str) -> None:
     if (
         db.query(Escalation)
         .filter(
-            Escalation.workspace_id == workspace_id,
+            Escalation.cycle_id == cycle_id,
             Escalation.level == 4,
             Escalation.status == EscalationStatus.OPEN.value,
         )
@@ -447,6 +455,7 @@ def _escalation_4(db: Session, workspace_id: int, company_name: str, kind: str) 
     create_escalation(
         db,
         workspace_id=workspace_id,
+        cycle_id=cycle_id,
         phase_key=PhaseKey.OUTREACH.value,
         level=4,
         title=f"Требуется личный контакт: {company_name}",
@@ -463,10 +472,12 @@ def record_agreement(
     summary: str,
     status: str = "agreed",
 ) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     company = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.id == company_id)
+        .filter(Company.cycle_id == cid, Company.id == company_id)
         .one_or_none()
     )
     if not company:
@@ -503,13 +514,13 @@ def record_agreement(
         notes=summary[:500],
     )
 
-    phase = get_phase_run(db, ws.id, PhaseKey.OUTREACH.value)
+    phase = get_phase_run(db, cid, PhaseKey.OUTREACH.value)
     if phase.status == PhaseStatus.ACTIVE.value:
         phase.progress_pct = 100
         phase.status = PhaseStatus.COMPLETED.value
-        unlock_next_phase(db, PhaseKey.OUTREACH)
+        unlock_next_phase(db, cid, PhaseKey.OUTREACH)
 
-    projects_phase = get_phase_run(db, ws.id, PhaseKey.PROJECTS.value)
+    projects_phase = get_phase_run(db, cid, PhaseKey.PROJECTS.value)
     if projects_phase.status == PhaseStatus.LOCKED.value:
         projects_phase.status = PhaseStatus.ACTIVE.value
         projects_phase.progress_pct = 10

@@ -5,8 +5,8 @@ import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
 import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
-import { approveIndustry, fetchDashboard, resolveEscalation } from "@/lib/api";
-import { canUseEdAgent, getUser } from "@/lib/auth";
+import { approveIndustry, activatePartnershipCycle, createPartnershipCycle, fetchCycles, fetchDashboard, reopenCyclePhase, resolveEscalation } from "@/lib/api";
+import { canUseEdAgent, getUser, setCycleId } from "@/lib/auth";
 import type { DashboardData } from "@/lib/types";
 import clsx from "clsx";
 import {
@@ -41,7 +41,8 @@ export default function DashboardPage() {
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [industry, setIndustry] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [cycles, setCycles] = useState<Awaited<ReturnType<typeof fetchCycles>>["cycles"]>([]);
+  const [newCycleName, setNewCycleName] = useState("");
 
   const load = useCallback(async () => {
     setError("");
@@ -49,6 +50,8 @@ export default function DashboardPage() {
       const d = await fetchDashboard();
       setData(d);
       setIndustry((prev) => prev || d.workspace.industry || "");
+      const cl = await fetchCycles().catch(() => ({ cycles: [] }));
+      setCycles(cl.cycles);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки");
     } finally {
@@ -101,6 +104,76 @@ export default function DashboardPage() {
             </Link>
             <h1 className="text-2xl font-bold">EdAgent — цикл партнёрства</h1>
           </div>
+
+          {data?.workspace.active_cycle && (
+            <section className="mb-8 rounded-2xl border border-border bg-surface-2 p-5">
+              <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">
+                Цикл работы (отдельные компании и проекты)
+              </h2>
+              <div className="mb-3 flex flex-wrap items-center gap-2">
+                <label className="text-sm text-muted">
+                  Активный цикл
+                  <select
+                    className="ml-2 rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text"
+                    value={data.workspace.active_cycle.id}
+                    onChange={async (e) => {
+                      const id = Number(e.target.value);
+                      setBusy(true);
+                      try {
+                        await activatePartnershipCycle(id);
+                        await load();
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : "Ошибка");
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                  >
+                    {cycles.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                        {c.is_active ? " · активен" : ""} — {c.project_count ?? 0} проектов,{" "}
+                        {c.company_count ?? 0} компаний
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  type="text"
+                  placeholder="Название нового цикла (необязательно)"
+                  value={newCycleName}
+                  onChange={(e) => setNewCycleName(e.target.value)}
+                  className="min-w-[200px] flex-1 rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+                />
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={async () => {
+                    setBusy(true);
+                    try {
+                      const r = await createPartnershipCycle(newCycleName.trim() || undefined);
+                      setCycleId(r.cycle.id);
+                      setNewCycleName("");
+                      await load();
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : "Ошибка");
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                  className="rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+                >
+                  Новый цикл
+                </button>
+              </div>
+              <p className="mt-3 text-xs text-muted">
+                Каждый цикл — свой набор компаний, писем и проектов. Фазы можно проходить повторно:
+                нажмите «Открыть снова» на завершённой фазе.
+              </p>
+            </section>
+          )}
 
           {loading && <p className="text-muted">Загрузка…</p>}
           {error && (
@@ -210,6 +283,31 @@ export default function DashboardPage() {
                         style={{ width: `${phase.progress_pct}%` }}
                       />
                     </div>
+                    {canUseEdAgent(getUser()) &&
+                      data.workspace.active_cycle &&
+                      phase.status !== "active" && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={async () => {
+                            setBusy(true);
+                            try {
+                              await reopenCyclePhase(
+                                data.workspace.active_cycle!.id,
+                                phase.key,
+                              );
+                              await load();
+                            } catch (err) {
+                              setError(err instanceof Error ? err.message : "Ошибка");
+                            } finally {
+                              setBusy(false);
+                            }
+                          }}
+                          className="mt-3 w-full rounded-lg border border-border py-1.5 text-xs text-accent hover:border-accent"
+                        >
+                          Открыть снова
+                        </button>
+                      )}
                   </div>
                 ))}
               </div>

@@ -70,15 +70,38 @@ class Workspace(Base):
     industry: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
-    phases: Mapped[list[PhaseRun]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
-    escalations: Mapped[list[Escalation]] = relationship(back_populates="workspace", cascade="all, delete-orphan")
+    cycles: Mapped[list["PartnershipCycle"]] = relationship(
+        back_populates="workspace",
+        cascade="all, delete-orphan",
+    )
+    escalations: Mapped[list["Escalation"]] = relationship(back_populates="workspace")
+
+
+class PartnershipCycle(Base):
+    """Отдельный проход по 5 фазам (сезон / поток / кампания)."""
+
+    __tablename__ = "partnership_cycles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    name: Mapped[str] = mapped_column(String(255))
+    industry: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    created_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    workspace: Mapped[Workspace] = relationship(
+        back_populates="cycles",
+        foreign_keys=[workspace_id],
+    )
+    phases: Mapped[list[PhaseRun]] = relationship(back_populates="cycle", cascade="all, delete-orphan")
 
 
 class PhaseRun(Base):
     __tablename__ = "phase_runs"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    cycle_id: Mapped[int] = mapped_column(ForeignKey("partnership_cycles.id"), index=True)
     phase_key: Mapped[str] = mapped_column(String(64), index=True)
     status: Mapped[str] = mapped_column(String(32), default=PhaseStatus.LOCKED.value)
     progress_pct: Mapped[int] = mapped_column(Integer, default=0)
@@ -87,7 +110,7 @@ class PhaseRun(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
-    workspace: Mapped[Workspace] = relationship(back_populates="phases")
+    cycle: Mapped[PartnershipCycle] = relationship(back_populates="phases")
 
 
 class Escalation(Base):
@@ -95,6 +118,9 @@ class Escalation(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    cycle_id: Mapped[int | None] = mapped_column(
+        ForeignKey("partnership_cycles.id"), nullable=True, index=True
+    )
     phase_key: Mapped[str] = mapped_column(String(64))
     level: Mapped[int] = mapped_column(Integer)
     title: Mapped[str] = mapped_column(String(512))
@@ -125,6 +151,7 @@ class Company(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    cycle_id: Mapped[int] = mapped_column(ForeignKey("partnership_cycles.id"), index=True)
     external_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
     name: Mapped[str] = mapped_column(String(512))
     industry: Mapped[str | None] = mapped_column(String(255), nullable=True)
@@ -154,6 +181,7 @@ class Competency(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    cycle_id: Mapped[int] = mapped_column(ForeignKey("partnership_cycles.id"), index=True)
     name: Mapped[str] = mapped_column(String(255), index=True)
     source: Mapped[str] = mapped_column(String(32), default="program")
     demand_score: Mapped[int | None] = mapped_column(Integer, nullable=True)
@@ -165,6 +193,7 @@ class Vacancy(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    cycle_id: Mapped[int] = mapped_column(ForeignKey("partnership_cycles.id"), index=True)
     external_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     title: Mapped[str] = mapped_column(String(512))
     source: Mapped[str] = mapped_column(String(32), default="hh")
@@ -292,6 +321,7 @@ class CommunicationOutcome(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    cycle_id: Mapped[int] = mapped_column(ForeignKey("partnership_cycles.id"), index=True)
     company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
     communication_id: Mapped[int | None] = mapped_column(
         ForeignKey("communications.id"), nullable=True
@@ -311,6 +341,7 @@ class StrategyPattern(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    cycle_id: Mapped[int] = mapped_column(ForeignKey("partnership_cycles.id"), index=True)
     category: Mapped[str] = mapped_column(String(32), index=True)
     tone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     outcome: Mapped[str] = mapped_column(String(32))
@@ -335,6 +366,7 @@ class Project(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    cycle_id: Mapped[int] = mapped_column(ForeignKey("partnership_cycles.id"), index=True)
     company_id: Mapped[int | None] = mapped_column(ForeignKey("companies.id"), nullable=True)
     agreement_id: Mapped[int | None] = mapped_column(
         ForeignKey("partner_agreements.id"), nullable=True, index=True

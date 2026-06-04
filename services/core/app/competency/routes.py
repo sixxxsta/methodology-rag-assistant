@@ -18,7 +18,8 @@ from .service import (
     matrix_chart,
     seed_program_competencies,
 )
-from ..services import ensure_workspace, log_action
+from ..cycles.service import get_work_context
+from ..services import log_action
 
 router = APIRouter(prefix="/competencies", tags=["competencies"])
 
@@ -105,11 +106,11 @@ def program_seed(
     db: Session = Depends(get_db),
     user: Annotated[dict[str, str], Depends(require_curator)] = None,
 ):
-    ws = ensure_workspace(db)
-    count = seed_program_competencies(db, ws.id)
+    ctx = get_work_context(db)
+    count = seed_program_competencies(db, ctx.workspace_id, cycle_id=ctx.cycle_id)
     log_action(
         db,
-        workspace_id=ws.id,
+        workspace_id=ctx.workspace_id,
         actor_email=user["email"],
         action="competency.program_seed",
         details=f"count={count}",

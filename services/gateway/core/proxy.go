@@ -59,8 +59,11 @@ func (p *Proxy) Handler() http.Handler {
 		r.Header.Set("X-User-Email", claims.Email)
 		r.Header.Set("X-User-Id", strings.TrimSpace(claims.Subject))
 		r.Header.Set("X-User-Role", claims.Role)
-		if p.internalSecret != "" {
+        if p.internalSecret != "" {
 			r.Header.Set("X-Core-Internal-Key", p.internalSecret)
+		}
+		if cid := r.Header.Get("X-Cycle-Id"); cid != "" {
+			r.Header.Set("X-Cycle-Id", cid)
 		}
 		if cid := r.Header.Get("X-Correlation-Id"); cid != "" {
 			r.Header.Set("X-Correlation-Id", cid)

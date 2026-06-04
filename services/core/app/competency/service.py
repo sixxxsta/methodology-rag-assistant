@@ -10,7 +10,8 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..models import Competency, PhaseKey, Vacancy
-from ..services import ensure_workspace, log_action, update_phase
+from ..cycles.service import get_work_context
+from ..services import log_action, update_phase
 from .providers import get_vacancy_provider
 from .providers.base import vacancy_body
 from .skills import aggregate_skill_counts_weighted
@@ -20,14 +21,18 @@ logger = logging.getLogger(__name__)
 PROGRAM_DATA = Path(__file__).resolve().parents[2] / "data" / "program_competencies.json"
 
 
-def seed_program_competencies(db: Session, workspace_id: int) -> int:
+def seed_program_competencies(db: Session, workspace_id: int, *, cycle_id: int) -> int:
     if not PROGRAM_DATA.exists():
         logger.warning("program competencies file missing: %s", PROGRAM_DATA)
         return 0
 
     existing = (
         db.query(Competency)
-        .filter(Competency.workspace_id == workspace_id, Competency.source == "program")
+        .filter(
+            Competency.workspace_id == workspace_id,
+            Competency.cycle_id == cycle_id,
+            Competency.source == "program",
+        )
         .count()
     )
     if existing > 0:
@@ -42,6 +47,7 @@ def seed_program_competencies(db: Session, workspace_id: int) -> int:
         db.add(
             Competency(
                 workspace_id=workspace_id,
+                cycle_id=cycle_id,
                 name=name,
                 source="program",
                 program_level=int(item.get("level", 3)),
@@ -62,8 +68,10 @@ def collect_vacancies(
     provider: str = "hh",
 ) -> dict:
     settings = get_settings()
-    ws = ensure_workspace(db)
-    seed_program_competencies(db, ws.id)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
+    seed_program_competencies(db, ws.id, cycle_id=cid)
 
     prov = get_vacancy_provider(provider, settings)
     vacancies = prov.search_vacancies(
@@ -82,7 +90,7 @@ def collect_vacancies(
         if ext_id:
             exists = (
                 db.query(Vacancy)
-                .filter(Vacancy.workspace_id == ws.id, Vacancy.external_id == ext_id)
+                .filter(Vacancy.cycle_id == cid, Vacancy.external_id == ext_id)
                 .first()
             )
             if exists:
@@ -94,6 +102,7 @@ def collect_vacancies(
         db.add(
             Vacancy(
                 workspace_id=ws.id,
+                cycle_id=cid,
                 external_id=ext_id or None,
                 title=(v.get("name") or "Без названия")[:512],
                 source=source,
@@ -105,7 +114,7 @@ def collect_vacancies(
     skill_counts = aggregate_skill_counts_weighted(processed)
 
     db.query(Competency).filter(
-        Competency.workspace_id == ws.id,
+        Competency.cycle_id == cid,
         Competency.source == "industry",
     ).delete()
 
@@ -113,6 +122,7 @@ def collect_vacancies(
         db.add(
             Competency(
                 workspace_id=ws.id,
+                cycle_id=cid,
                 name=name,
                 source="industry",
                 demand_score=demand,
@@ -146,7 +156,7 @@ def collect_vacancies(
         open_esc = (
             db.query(Escalation)
             .filter(
-                Escalation.workspace_id == ws.id,
+                Escalation.cycle_id == cid,
                 Escalation.level == 1,
                 Escalation.status == EscalationStatus.OPEN.value,
             )
@@ -156,6 +166,7 @@ def collect_vacancies(
             create_escalation(
                 db,
                 workspace_id=ws.id,
+                cycle_id=cid,
                 phase_key=PhaseKey.INDUSTRY.value,
                 level=1,
                 title="Сильное отставание программы от рынка",
@@ -222,19 +233,21 @@ def export_matrix_csv(db: Session) -> str:
 
 
 def build_matrix(db: Session) -> dict:
-    ws = ensure_workspace(db)
-    seed_program_competencies(db, ws.id)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
+    seed_program_competencies(db, ws.id, cycle_id=cid)
 
     program = {
         c.name: c.program_level or 0
         for c in db.query(Competency)
-        .filter(Competency.workspace_id == ws.id, Competency.source == "program")
+        .filter(Competency.cycle_id == cid, Competency.source == "program")
         .all()
     }
     industry = {
         c.name: c.demand_score or 0
         for c in db.query(Competency)
-        .filter(Competency.workspace_id == ws.id, Competency.source == "industry")
+        .filter(Competency.cycle_id == cid, Competency.source == "industry")
         .all()
     }
 
@@ -281,7 +294,7 @@ def build_matrix(db: Session) -> dict:
     items.sort(key=lambda x: (-x["industry_demand_pct"], x["name"]))
 
     vacancy_count = (
-        db.query(Vacancy).filter(Vacancy.workspace_id == ws.id).count()
+        db.query(Vacancy).filter(Vacancy.cycle_id == cid).count()
     )
 
     return {
@@ -336,13 +349,15 @@ def matrix_chart(db: Session) -> dict:
 
 
 def get_stats(db: Session) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     return {
         "program_competencies": db.query(Competency)
-        .filter(Competency.workspace_id == ws.id, Competency.source == "program")
+        .filter(Competency.cycle_id == cid, Competency.source == "program")
         .count(),
         "industry_competencies": db.query(Competency)
-        .filter(Competency.workspace_id == ws.id, Competency.source == "industry")
+        .filter(Competency.cycle_id == cid, Competency.source == "industry")
         .count(),
-        "vacancies": db.query(Vacancy).filter(Vacancy.workspace_id == ws.id).count(),
+        "vacancies": db.query(Vacancy).filter(Vacancy.cycle_id == cid).count(),
     }

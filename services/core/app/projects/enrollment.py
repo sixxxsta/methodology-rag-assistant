@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from ..models import Project, ProjectEnrollment, ProjectRole
-from ..services import ensure_workspace, log_action
+from ..cycles.service import get_work_context
+from ..services import log_action
 
 
 def _enrollment_dict(enrollment: ProjectEnrollment, role: ProjectRole | None = None) -> dict:
@@ -49,11 +50,13 @@ def enroll_student(
     student_user_id: str | None,
     role_id: int | None = None,
 ) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     project = (
         db.query(Project)
         .filter(
-            Project.workspace_id == ws.id,
+            Project.cycle_id == cid,
             Project.id == project_id,
             Project.catalog_visible.is_(True),
         )
@@ -116,14 +119,16 @@ def enroll_student(
 
 
 def withdraw_enrollment(db: Session, project_id: int, *, student_email: str) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     enrollment = get_student_enrollment(db, project_id, student_email)
     if not enrollment or enrollment.status != "active":
         raise ValueError("not enrolled in this project")
 
     project = (
         db.query(Project)
-        .filter(Project.workspace_id == ws.id, Project.id == project_id)
+        .filter(Project.cycle_id == cid, Project.id == project_id)
         .one()
     )
 
@@ -142,13 +147,15 @@ def withdraw_enrollment(db: Session, project_id: int, *, student_email: str) -> 
 
 
 def list_my_enrollments(db: Session, *, student_email: str) -> list[dict]:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     rows = (
         db.query(ProjectEnrollment, Project, ProjectRole)
         .join(Project, ProjectEnrollment.project_id == Project.id)
         .outerjoin(ProjectRole, ProjectEnrollment.role_id == ProjectRole.id)
         .filter(
-            Project.workspace_id == ws.id,
+            Project.cycle_id == cid,
             ProjectEnrollment.student_email == student_email,
             ProjectEnrollment.status == "active",
         )

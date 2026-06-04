@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session
 
+from .cycles.service import (
+    ensure_phase_runs,
+    ensure_workspace,
+    get_phase_run,
+    get_work_context,
+    unlock_next_phase,
+)
 from .models import (
     PHASE_META,
     PHASE_ORDER,
@@ -11,76 +18,15 @@ from .models import (
     PhaseKey,
     PhaseRun,
     PhaseStatus,
-    Workspace,
 )
 from .schemas import (
     AuditLogOut,
+    CycleOut,
     DashboardOut,
     EscalationOut,
     PhaseOut,
     WorkspaceOut,
 )
-
-
-def ensure_phase_runs(db: Session, workspace_id: int) -> None:
-    """Create missing phase rows (DB created before a sprint added new phases)."""
-    existing = {
-        row.phase_key
-        for row in db.query(PhaseRun).filter(PhaseRun.workspace_id == workspace_id).all()
-    }
-    added = False
-    for i, key in enumerate(PHASE_ORDER):
-        if key.value in existing:
-            continue
-        status = PhaseStatus.ACTIVE.value if i == 0 and not existing else PhaseStatus.LOCKED.value
-        db.add(
-            PhaseRun(
-                workspace_id=workspace_id,
-                phase_key=key.value,
-                status=status,
-                progress_pct=5 if status == PhaseStatus.ACTIVE.value else 0,
-            )
-        )
-        added = True
-    if added:
-        db.commit()
-
-
-def get_phase_run(db: Session, workspace_id: int, phase_key: str) -> PhaseRun:
-    ensure_phase_runs(db, workspace_id)
-    run = (
-        db.query(PhaseRun)
-        .filter(PhaseRun.workspace_id == workspace_id, PhaseRun.phase_key == phase_key)
-        .one_or_none()
-    )
-    if not run:
-        raise ValueError(f"phase not found: {phase_key}")
-    return run
-
-
-def ensure_workspace(db: Session) -> Workspace:
-    ws = db.query(Workspace).order_by(Workspace.id).first()
-    if ws:
-        ensure_phase_runs(db, ws.id)
-        return ws
-
-    ws = Workspace(name="Основной цикл партнёрства")
-    db.add(ws)
-    db.flush()
-
-    for i, key in enumerate(PHASE_ORDER):
-        status = PhaseStatus.ACTIVE.value if i == 0 else PhaseStatus.LOCKED.value
-        db.add(
-            PhaseRun(
-                workspace_id=ws.id,
-                phase_key=key.value,
-                status=status,
-                progress_pct=0 if i > 0 else 5,
-            )
-        )
-    db.commit()
-    db.refresh(ws)
-    return ws
 
 
 def _phase_out(run: PhaseRun) -> PhaseOut:
@@ -99,24 +45,26 @@ def _phase_out(run: PhaseRun) -> PhaseOut:
 
 
 def get_dashboard(db: Session) -> DashboardOut:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cycle = ctx.cycle
     phases = (
         db.query(PhaseRun)
-        .filter(PhaseRun.workspace_id == ws.id)
+        .filter(PhaseRun.cycle_id == cycle.id)
         .order_by(PhaseRun.id)
         .all()
     )
     open_count = (
         db.query(Escalation)
         .filter(
-            Escalation.workspace_id == ws.id,
+            Escalation.cycle_id == cycle.id,
             Escalation.status == EscalationStatus.OPEN.value,
         )
         .count()
     )
     escalations = (
         db.query(Escalation)
-        .filter(Escalation.workspace_id == ws.id)
+        .filter(Escalation.cycle_id == cycle.id)
         .order_by(Escalation.created_at.desc())
         .limit(20)
         .all()
@@ -132,10 +80,17 @@ def get_dashboard(db: Session) -> DashboardOut:
     workspace_out = WorkspaceOut(
         id=ws.id,
         name=ws.name,
-        industry=ws.industry,
+        industry=cycle.industry or ws.industry,
         created_at=ws.created_at,
         phases=[_phase_out(p) for p in phases],
         open_escalations=open_count,
+        active_cycle=CycleOut(
+            id=cycle.id,
+            name=cycle.name,
+            industry=cycle.industry,
+            status=cycle.status,
+            is_active=cycle.status == "active",
+        ),
     )
     return DashboardOut(
         workspace=workspace_out,
@@ -175,8 +130,8 @@ def update_phase(
     progress_pct: int | None = None,
     notes: str | None = None,
 ) -> PhaseOut:
-    ws = ensure_workspace(db)
-    run = get_phase_run(db, ws.id, phase_key)
+    ctx = get_work_context(db)
+    run = get_phase_run(db, ctx.cycle_id, phase_key)
     if status is not None:
         run.status = status
     if progress_pct is not None:
@@ -186,33 +141,23 @@ def update_phase(
 
     log_action(
         db,
-        workspace_id=ws.id,
+        workspace_id=ctx.workspace_id,
         actor_email=actor_email,
         action="phase.update",
         entity_type="phase",
         entity_id=phase_key,
-        details=f"status={run.status}, progress={run.progress_pct}",
+        details=f"cycle={ctx.cycle_id}, status={run.status}, progress={run.progress_pct}",
     )
     db.commit()
     db.refresh(run)
     return _phase_out(run)
 
 
-def unlock_next_phase(db: Session, completed_key: PhaseKey) -> None:
-    ws = ensure_workspace(db)
-    idx = PHASE_ORDER.index(completed_key)
-    if idx + 1 >= len(PHASE_ORDER):
-        return
-    next_key = PHASE_ORDER[idx + 1]
-    nxt = get_phase_run(db, ws.id, next_key.value)
-    if nxt.status == PhaseStatus.LOCKED.value:
-        nxt.status = PhaseStatus.ACTIVE.value
-
-
 def create_escalation(
     db: Session,
     *,
     workspace_id: int,
+    cycle_id: int,
     phase_key: str,
     level: int,
     title: str,
@@ -220,6 +165,7 @@ def create_escalation(
 ) -> Escalation:
     esc = Escalation(
         workspace_id=workspace_id,
+        cycle_id=cycle_id,
         phase_key=phase_key,
         level=level,
         title=title,
@@ -272,19 +218,23 @@ def approve_industry(
     industry: str,
     comment: str | None,
 ) -> DashboardOut:
-    ws = ensure_workspace(db)
-    ws.industry = industry.strip()
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cycle = ctx.cycle
+    industry_text = industry.strip()
+    cycle.industry = industry_text
+    ws.industry = industry_text
 
-    industry_phase = get_phase_run(db, ws.id, PhaseKey.INDUSTRY.value)
+    industry_phase = get_phase_run(db, ctx.cycle_id, PhaseKey.INDUSTRY.value)
     industry_phase.status = PhaseStatus.COMPLETED.value
     industry_phase.progress_pct = 100
 
-    unlock_next_phase(db, PhaseKey.INDUSTRY)
+    unlock_next_phase(db, ctx.cycle_id, PhaseKey.INDUSTRY)
 
     open_esc = (
         db.query(Escalation)
         .filter(
-            Escalation.workspace_id == ws.id,
+            Escalation.cycle_id == cycle.id,
             Escalation.level == 1,
             Escalation.status == EscalationStatus.OPEN.value,
         )
@@ -302,8 +252,8 @@ def approve_industry(
         workspace_id=ws.id,
         actor_email=actor_email,
         action="industry.approve",
-        entity_type="workspace",
-        entity_id=str(ws.id),
+        entity_type="cycle",
+        entity_id=str(cycle.id),
         details=f"industry={industry}; {comment or ''}".strip(),
     )
     db.commit()
@@ -311,21 +261,21 @@ def approve_industry(
 
 
 def seed_escalation_if_needed(db: Session) -> None:
-    """Demo escalation #1 when industry phase is active and none exists."""
-    ws = ensure_workspace(db)
-    industry = get_phase_run(db, ws.id, PhaseKey.INDUSTRY.value)
+    ctx = get_work_context(db)
+    industry = get_phase_run(db, ctx.cycle_id, PhaseKey.INDUSTRY.value)
     if industry.status != PhaseStatus.ACTIVE.value:
         return
     exists = (
         db.query(Escalation)
-        .filter(Escalation.workspace_id == ws.id, Escalation.level == 1)
+        .filter(Escalation.cycle_id == ctx.cycle_id, Escalation.level == 1)
         .first()
     )
     if exists:
         return
     create_escalation(
         db,
-        workspace_id=ws.id,
+        workspace_id=ctx.workspace_id,
+        cycle_id=ctx.cycle_id,
         phase_key=PhaseKey.INDUSTRY.value,
         level=1,
         title="Утвердите отрасль и приоритеты",

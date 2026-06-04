@@ -13,7 +13,7 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..services import ensure_workspace
+from ..cycles.service import get_work_context
 from .service import get_faq
 
 logger = logging.getLogger(__name__)
@@ -45,7 +45,9 @@ def _ensure_font() -> str:
 
 
 def build_presentation_pdf(db: Session) -> bytes:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     settings = get_settings()
     faq_comm = get_faq(db)
 

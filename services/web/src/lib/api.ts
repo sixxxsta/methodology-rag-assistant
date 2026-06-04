@@ -1,6 +1,6 @@
 "use client";
 
-import { authHeaders, clearSession } from "./auth";
+import { authHeaders, clearSession, getCycleId, setCycleId } from "./auth";
 import type {
   CommunicationInfo,
   CompanyInfo,
@@ -149,7 +149,56 @@ export async function createStaffUser(payload: {
 
 export async function fetchDashboard(): Promise<DashboardData> {
   const res = await fetch("/api/ed/dashboard", { headers: authHeaders() });
-  return handleResponse<DashboardData>(res);
+  const data = await handleResponse<DashboardData>(res);
+  if (data.workspace.active_cycle?.id) {
+    setCycleId(data.workspace.active_cycle.id);
+  }
+  return data;
+}
+
+export type PartnershipCycle = {
+  id: number;
+  workspace_id: number;
+  name: string;
+  industry?: string | null;
+  status: string;
+  created_by?: string | null;
+  created_at?: string | null;
+  project_count?: number;
+  company_count?: number;
+  is_active: boolean;
+};
+
+export async function fetchCycles() {
+  const res = await fetch("/api/ed/cycles", { headers: authHeaders() });
+  return handleResponse<{ cycles: PartnershipCycle[] }>(res);
+}
+
+export async function createPartnershipCycle(name?: string) {
+  const res = await fetch("/api/ed/cycles", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ name: name || null }),
+  });
+  return handleResponse<{ cycle: PartnershipCycle }>(res);
+}
+
+export async function activatePartnershipCycle(cycleId: number) {
+  const res = await fetch(`/api/ed/cycles/${cycleId}/activate`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  const data = await handleResponse<{ cycle: PartnershipCycle }>(res);
+  setCycleId(cycleId);
+  return data;
+}
+
+export async function reopenCyclePhase(cycleId: number, phaseKey: string) {
+  const res = await fetch(`/api/ed/cycles/${cycleId}/phases/${phaseKey}/reopen`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return handleResponse(res);
 }
 
 export async function approveIndustry(industry: string, comment?: string) {
@@ -528,6 +577,7 @@ export async function fetchProjectCatalog(competencies?: string) {
       team_size?: number | null;
       duration_weeks?: number | null;
       competencies?: string | null;
+      cycle_name?: string | null;
       published_at?: string | null;
       enrollment_count?: number;
       seats_left?: number;

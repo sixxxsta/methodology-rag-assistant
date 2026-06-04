@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from ..config import get_settings
 from ..models import Company
-from ..services import ensure_workspace
+from ..cycles.service import get_work_context
 from .service import record_inbound
 
 logger = logging.getLogger(__name__)
@@ -77,7 +77,9 @@ def poll_imap_inbox(db: Session) -> dict[str, Any]:
         return {"skipped": True, "reason": "imap not configured"}
 
     settings = get_settings()
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     processed = 0
     matched = 0
     errors: list[str] = []

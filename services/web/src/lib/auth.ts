@@ -4,6 +4,7 @@ import type { User } from "./types";
 
 const TOKEN_KEY = "methodology_token";
 const USER_KEY = "methodology_user";
+const CYCLE_KEY = "edagent_cycle_id";
 
 export function getToken(): string {
   if (typeof window === "undefined") return "";
@@ -28,6 +29,19 @@ export function setSession(token: string, user: User) {
 export function clearSession() {
   localStorage.removeItem(TOKEN_KEY);
   localStorage.removeItem(USER_KEY);
+  localStorage.removeItem(CYCLE_KEY);
+}
+
+export function getCycleId(): number | null {
+  if (typeof window === "undefined") return null;
+  const raw = localStorage.getItem(CYCLE_KEY);
+  if (!raw) return null;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+export function setCycleId(id: number) {
+  localStorage.setItem(CYCLE_KEY, String(id));
 }
 
 export function normalizeRole(role: string | undefined): User["role"] {
@@ -67,5 +81,7 @@ export function authHeaders(extra?: HeadersInit): HeadersInit {
   const h = new Headers(extra);
   const token = getToken();
   if (token) h.set("Authorization", `Bearer ${token}`);
+  const cycleId = getCycleId();
+  if (cycleId) h.set("X-Cycle-Id", String(cycleId));
   return h;
 }

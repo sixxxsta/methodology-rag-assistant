@@ -45,10 +45,9 @@ def _run_alembic_migrations() -> None:
 
 
 def _repair_workspaces() -> None:
-    from .services import ensure_phase_runs
+    from .cycles.service import ensure_default_cycle, ensure_workspace, migrate_legacy_workspace_to_cycles
 
     with SessionLocal() as db:
-        from .models import Workspace
-
-        for ws in db.query(Workspace).all():
-            ensure_phase_runs(db, ws.id)
+        ws = ensure_workspace(db)
+        migrate_legacy_workspace_to_cycles(db)
+        ensure_default_cycle(db, ws)

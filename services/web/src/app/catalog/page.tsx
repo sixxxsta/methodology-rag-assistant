@@ -236,6 +236,9 @@ export default function CatalogPage() {
                   {item.company_name && (
                     <p className="mt-1 text-sm text-accent">{item.company_name}</p>
                   )}
+                  {item.cycle_name && (
+                    <p className="mt-1 text-xs text-muted">Цикл: {item.cycle_name}</p>
+                  )}
                   {item.description && (
                     <p className="mt-2 text-sm text-muted line-clamp-4">{item.description}</p>
                   )}

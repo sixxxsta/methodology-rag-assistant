@@ -42,6 +42,14 @@ class AuditLogOut(BaseModel):
     created_at: datetime
 
 
+class CycleOut(BaseModel):
+    id: int
+    name: str
+    industry: str | None = None
+    status: str
+    is_active: bool = False
+
+
 class WorkspaceOut(BaseModel):
     id: int
     name: str
@@ -49,6 +57,7 @@ class WorkspaceOut(BaseModel):
     created_at: datetime
     phases: list[PhaseOut]
     open_escalations: int
+    active_cycle: CycleOut | None = None
 
 
 class DashboardOut(BaseModel):

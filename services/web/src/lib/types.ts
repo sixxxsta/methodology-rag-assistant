@@ -138,6 +138,13 @@ export type DashboardData = {
     industry?: string | null;
     phases: PhaseInfo[];
     open_escalations: number;
+    active_cycle?: {
+      id: number;
+      name: string;
+      industry?: string | null;
+      status: string;
+      is_active: boolean;
+    } | null;
   };
   escalations: EscalationInfo[];
   recent_audit: AuditEntry[];

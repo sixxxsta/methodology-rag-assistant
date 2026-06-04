@@ -12,17 +12,14 @@ from ..hh_fallback import (
     load_demo_employers,
 )
 from ..models import Company, Competency, Escalation, EscalationStatus, PhaseKey, PhaseStatus, PhaseRun
+from ..cycles.service import get_work_context, get_phase_run, unlock_next_phase
 from ..services import (
     create_escalation,
-    ensure_workspace,
-    get_phase_run,
     log_action,
-    unlock_next_phase,
     update_phase,
 )
 from .hh_employers import employer_to_company_fields, search_employers
-from ..config import get_settings
-from .scoring import ScoreResult, industry_skill_set, score_company
+from .scoring import apply_score, industry_skill_set, score_company
 
 logger = logging.getLogger(__name__)
 
@@ -66,8 +63,10 @@ def list_companies(
     status: str | None = None,
     shortlist_only: bool = False,
 ) -> list[dict]:
-    ws = ensure_workspace(db)
-    q = db.query(Company).filter(Company.workspace_id == ws.id)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
+    q = db.query(Company).filter(Company.cycle_id == cid)
     if status:
         q = q.filter(Company.status == status)
     if shortlist_only:
@@ -77,36 +76,40 @@ def list_companies(
 
 
 def get_top(db: Session, n: int) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     rows = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.status != "rejected")
+        .filter(Company.cycle_id == cid, Company.status != "rejected")
         .order_by(Company.score.desc().nullslast())
         .limit(n)
         .all()
     )
     return {
         "limit": n,
-        "total_in_workspace": db.query(Company).filter(Company.workspace_id == ws.id).count(),
+        "total_in_workspace": db.query(Company).filter(Company.cycle_id == cid).count(),
         "companies": [_company_dict(c) for c in rows],
     }
 
 
 def get_company(db: Session, company_id: int) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     c = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.id == company_id)
+        .filter(Company.cycle_id == cid, Company.id == company_id)
         .one()
     )
     return _company_dict(c)
 
 
-def _rescore_workspace(db: Session, workspace_id: int) -> int:
+def _rescore_workspace(db: Session, cycle_id: int) -> int:
     skills = industry_skill_set(
-        db.query(Competency).filter(Competency.workspace_id == workspace_id).all()
+        db.query(Competency).filter(Competency.cycle_id == cycle_id).all()
     )
-    companies = db.query(Company).filter(Company.workspace_id == workspace_id).all()
+    companies = db.query(Company).filter(Company.cycle_id == cycle_id).all()
     for c in companies:
         if c.status == "rejected":
             continue
@@ -123,7 +126,9 @@ def discover_employers(
     max_pages: int = 5,
 ) -> dict:
     settings = get_settings()
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     search_text = query or ws.industry or "IT компания"
 
     demo_mode = False
@@ -157,16 +162,16 @@ def discover_employers(
         if ext_id:
             exists = (
                 db.query(Company)
-                .filter(Company.workspace_id == ws.id, Company.external_id == ext_id)
+                .filter(Company.cycle_id == cid, Company.external_id == ext_id)
                 .first()
             )
             if exists:
                 continue
-        db.add(Company(workspace_id=ws.id, **fields))
+        db.add(Company(workspace_id=ws.id, cycle_id=cid, **fields))
         added += 1
 
     db.commit()
-    scored = _rescore_workspace(db, ws.id)
+    scored = _rescore_workspace(db, cid)
 
     progress = min(85, 10 + scored // 2)
     update_phase(
@@ -187,7 +192,7 @@ def discover_employers(
     db.commit()
 
     if scored >= 10:
-        _seed_escalation_2(db, ws.id)
+        _seed_escalation_2(db, ws.id, cid)
 
     return {
         "added": added,
@@ -198,13 +203,13 @@ def discover_employers(
     }
 
 
-def _seed_escalation_2(db: Session, workspace_id: int) -> None:
-    phase = get_phase_run(db, workspace_id, PhaseKey.COMPANIES.value)
+def _seed_escalation_2(db: Session, workspace_id: int, cycle_id: int) -> None:
+    phase = get_phase_run(db, cycle_id, PhaseKey.COMPANIES.value)
     if phase.status != PhaseStatus.ACTIVE.value:
         return
     exists = (
         db.query(Escalation)
-        .filter(Escalation.workspace_id == workspace_id, Escalation.level == 2)
+        .filter(Escalation.cycle_id == cycle_id, Escalation.level == 2)
         .first()
     )
     if exists:
@@ -212,6 +217,7 @@ def _seed_escalation_2(db: Session, workspace_id: int) -> None:
     create_escalation(
         db,
         workspace_id=workspace_id,
+        cycle_id=cycle_id,
         phase_key=PhaseKey.COMPANIES.value,
         level=2,
         title="Верифицируйте шорт-лист компаний",
@@ -223,10 +229,12 @@ def _seed_escalation_2(db: Session, workspace_id: int) -> None:
 def enrich_company(db: Session, company_id: int, *, actor_email: str) -> dict:
     from .enrichment import fetch_website_profile
 
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     company = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.id == company_id)
+        .filter(Company.cycle_id == cid, Company.id == company_id)
         .one()
     )
     if not company.website:
@@ -244,7 +252,7 @@ def enrich_company(db: Session, company_id: int, *, actor_email: str) -> dict:
         company.tech_stack = profile["tech_stack"]
 
     skills = industry_skill_set(
-        db.query(Competency).filter(Competency.workspace_id == ws.id).all()
+        db.query(Competency).filter(Competency.cycle_id == cid).all()
     )
     apply_score(company, score_company(company, skills))
 
@@ -265,11 +273,13 @@ def enrich_company(db: Session, company_id: int, *, actor_email: str) -> dict:
 
 
 def enrich_batch(db: Session, *, actor_email: str, limit: int = 10) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     rows = (
         db.query(Company)
         .filter(
-            Company.workspace_id == ws.id,
+            Company.cycle_id == cid,
             Company.website.isnot(None),
             Company.website != "",
             Company.status != "rejected",
@@ -290,10 +300,12 @@ def enrich_batch(db: Session, *, actor_email: str, limit: int = 10) -> dict:
 
 
 def update_company(db: Session, company_id: int, **fields) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     c = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.id == company_id)
+        .filter(Company.cycle_id == cid, Company.id == company_id)
         .one()
     )
     allowed = {
@@ -305,7 +317,7 @@ def update_company(db: Session, company_id: int, **fields) -> dict:
         if key in allowed and val is not None:
             setattr(c, key, val)
     skills = industry_skill_set(
-        db.query(Competency).filter(Competency.workspace_id == ws.id).all()
+        db.query(Competency).filter(Competency.cycle_id == cid).all()
     )
     apply_score(c, score_company(c, skills))
     db.commit()
@@ -314,10 +326,12 @@ def update_company(db: Session, company_id: int, **fields) -> dict:
 
 
 def verify_company(db: Session, company_id: int, *, actor_email: str, shortlist: bool = True) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     c = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.id == company_id)
+        .filter(Company.cycle_id == cid, Company.id == company_id)
         .one()
     )
     c.verified = True
@@ -337,10 +351,12 @@ def verify_company(db: Session, company_id: int, *, actor_email: str, shortlist:
 
 
 def reject_company(db: Session, company_id: int, *, actor_email: str, reason: str = "") -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     c = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.id == company_id)
+        .filter(Company.cycle_id == cid, Company.id == company_id)
         .one()
     )
     c.status = "rejected"
@@ -362,10 +378,12 @@ def reject_company(db: Session, company_id: int, *, actor_email: str, reason: st
 
 
 def bulk_add_shortlist(db: Session, *, actor_email: str, limit: int = 3) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     rows = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.status != "rejected")
+        .filter(Company.cycle_id == cid, Company.status != "rejected")
         .order_by(Company.score.desc().nullslast())
         .limit(max(1, min(limit, 20)))
         .all()
@@ -394,11 +412,13 @@ def bulk_add_shortlist(db: Session, *, actor_email: str, limit: int = 3) -> dict
 def approve_shortlist(db: Session, *, actor_email: str) -> dict:
     from datetime import datetime, timezone
 
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     shortlist = (
         db.query(Company)
         .filter(
-            Company.workspace_id == ws.id,
+            Company.cycle_id == cid,
             Company.in_shortlist.is_(True),
             Company.status != "rejected",
         )
@@ -409,13 +429,13 @@ def approve_shortlist(db: Session, *, actor_email: str) -> dict:
             "шорт-лист пуст — сначала «Top-3 в шорт-лист» или отметьте компании галочкой"
         )
 
-    phase = get_phase_run(db, ws.id, PhaseKey.COMPANIES.value)
+    phase = get_phase_run(db, cid, PhaseKey.COMPANIES.value)
     if phase.status != PhaseStatus.COMPLETED.value:
         phase.status = PhaseStatus.COMPLETED.value
         phase.progress_pct = 100
-        unlock_next_phase(db, PhaseKey.COMPANIES)
+        unlock_next_phase(db, cid, PhaseKey.COMPANIES)
 
-    comm_phase = get_phase_run(db, ws.id, PhaseKey.COMMUNICATION.value)
+    comm_phase = get_phase_run(db, cid, PhaseKey.COMMUNICATION.value)
     if comm_phase.status == PhaseStatus.LOCKED.value:
         comm_phase.status = PhaseStatus.ACTIVE.value
         comm_phase.progress_pct = max(comm_phase.progress_pct, 10)
@@ -423,7 +443,7 @@ def approve_shortlist(db: Session, *, actor_email: str) -> dict:
     for esc in (
         db.query(Escalation)
         .filter(
-            Escalation.workspace_id == ws.id,
+            Escalation.cycle_id == cid,
             Escalation.level == 2,
             Escalation.status == EscalationStatus.OPEN.value,
         )

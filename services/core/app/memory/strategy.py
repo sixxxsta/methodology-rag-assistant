@@ -7,7 +7,8 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from ..models import Communication, CommunicationOutcome, StrategyPattern
-from ..services import ensure_workspace, log_action
+from ..cycles.service import get_work_context
+from ..services import log_action
 
 logger = logging.getLogger(__name__)
 
@@ -92,10 +93,12 @@ def _bump_counts(pattern: StrategyPattern, outcome: str) -> None:
 
 
 def sync_all_from_outcomes(db: Session, *, actor_email: str) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     rows = (
         db.query(CommunicationOutcome)
-        .filter(CommunicationOutcome.workspace_id == ws.id)
+        .filter(CommunicationOutcome.cycle_id == cid)
         .order_by(CommunicationOutcome.created_at.desc())
         .all()
     )
@@ -122,8 +125,10 @@ def list_patterns(
     outcome: str | None = None,
     limit: int = 20,
 ) -> list[dict]:
-    ws = ensure_workspace(db)
-    q = db.query(StrategyPattern).filter(StrategyPattern.workspace_id == ws.id)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
+    q = db.query(StrategyPattern).filter(StrategyPattern.cycle_id == cid)
     if category:
         q = q.filter(StrategyPattern.category == category)
     if tone:
@@ -140,11 +145,13 @@ def get_strategy_hints(
     category: str = "letter",
     tone: str | None = "formal",
 ) -> str:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     rows = (
         db.query(StrategyPattern)
         .filter(
-            StrategyPattern.workspace_id == ws.id,
+            StrategyPattern.cycle_id == cid,
             StrategyPattern.category == category,
             StrategyPattern.outcome == "success",
         )
@@ -175,20 +182,22 @@ def get_strategy_hints(
 
 
 def memory_stats(db: Session) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     total = (
         db.query(StrategyPattern)
-        .filter(StrategyPattern.workspace_id == ws.id)
+        .filter(StrategyPattern.cycle_id == cid)
         .count()
     )
     success = (
         db.query(StrategyPattern)
-        .filter(StrategyPattern.workspace_id == ws.id, StrategyPattern.outcome == "success")
+        .filter(StrategyPattern.cycle_id == cid, StrategyPattern.outcome == "success")
         .count()
     )
     outcomes = (
         db.query(CommunicationOutcome)
-        .filter(CommunicationOutcome.workspace_id == ws.id)
+        .filter(CommunicationOutcome.cycle_id == cid)
         .count()
     )
     return {

@@ -16,13 +16,10 @@ from ..models import (
     PhaseRun,
     TouchPoint,
 )
+from ..cycles.service import get_work_context, get_phase_run, unlock_next_phase
 from ..services import (
     create_escalation,
-    ensure_workspace,
-    get_phase_run,
     log_action,
-    unlock_next_phase,
-    update_phase,
 )
 from ..config import get_settings
 from .generator import (
@@ -68,11 +65,13 @@ def get_faq(db: Session) -> dict | None:
 
 
 def list_for_shortlist(db: Session) -> list[dict]:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     companies = (
         db.query(Company)
         .filter(
-            Company.workspace_id == ws.id,
+            Company.cycle_id == cid,
             Company.in_shortlist.is_(True),
             Company.status != "rejected",
         )
@@ -120,10 +119,12 @@ def generate_letter(
     actor_email: str,
     tone: str = "formal",
 ) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     company = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.id == company_id)
+        .filter(Company.cycle_id == cid, Company.id == company_id)
         .one()
     )
     settings = get_settings()
@@ -184,16 +185,18 @@ def generate_letter(
     )
     db.commit()
     db.refresh(comm)
-    _maybe_escalation_3(db, ws.id)
+    _maybe_escalation_3(db, ws.id, cid)
     return _comm_dict(comm, company.name)
 
 
 def generate_batch(db: Session, *, actor_email: str, tone: str = "formal") -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     companies = (
         db.query(Company)
         .filter(
-            Company.workspace_id == ws.id,
+            Company.cycle_id == cid,
             Company.in_shortlist.is_(True),
             Company.status != "rejected",
         )
@@ -218,7 +221,9 @@ def generate_batch(db: Session, *, actor_email: str, tone: str = "formal") -> di
 
 
 def generate_faq(db: Session, *, actor_email: str) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     existing = (
         db.query(Communication)
         .filter(Communication.comm_type == "faq", Communication.company_id.is_(None))
@@ -293,7 +298,9 @@ def approve_communication(db: Session, comm_id: int, *, actor_email: str) -> dic
     comm.status = "approved"
     comm.approved_by = actor_email
     comm.approved_at = datetime.now(timezone.utc)
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     log_action(
         db,
         workspace_id=ws.id,
@@ -311,12 +318,14 @@ def approve_communication(db: Session, comm_id: int, *, actor_email: str) -> dic
 
 
 def approve_all_ready(db: Session, *, actor_email: str) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     approved = (
         db.query(Communication)
         .join(Company, Communication.company_id == Company.id)
         .filter(
-            Company.workspace_id == ws.id,
+            Company.cycle_id == cid,
             Company.in_shortlist.is_(True),
             Communication.comm_type == "letter",
             Communication.status == "approved",
@@ -325,18 +334,18 @@ def approve_all_ready(db: Session, *, actor_email: str) -> dict:
     )
     shortlist = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.in_shortlist.is_(True))
+        .filter(Company.cycle_id == cid, Company.in_shortlist.is_(True))
         .count()
     )
     if approved < 1:
         raise ValueError("approve at least one letter before completing phase")
 
-    phase = get_phase_run(db, ws.id, PhaseKey.COMMUNICATION.value)
+    phase = get_phase_run(db, cid, PhaseKey.COMMUNICATION.value)
     phase.status = PhaseStatus.COMPLETED.value
     phase.progress_pct = 100
-    unlock_next_phase(db, PhaseKey.COMMUNICATION)
+    unlock_next_phase(db, cid, PhaseKey.COMMUNICATION)
 
-    outreach_phase = get_phase_run(db, ws.id, PhaseKey.OUTREACH.value)
+    outreach_phase = get_phase_run(db, cid, PhaseKey.OUTREACH.value)
     if outreach_phase.status == PhaseStatus.LOCKED.value:
         outreach_phase.status = PhaseStatus.ACTIVE.value
         outreach_phase.progress_pct = 10
@@ -344,7 +353,7 @@ def approve_all_ready(db: Session, *, actor_email: str) -> dict:
     for esc in (
         db.query(Escalation)
         .filter(
-            Escalation.workspace_id == ws.id,
+            Escalation.cycle_id == cid,
             Escalation.level == 3,
             Escalation.status == EscalationStatus.OPEN.value,
         )
@@ -388,8 +397,8 @@ def _ensure_touch_plan(db: Session, company_id: int, first_comm_id: int) -> None
         )
 
 
-def _maybe_escalation_3(db: Session, workspace_id: int) -> None:
-    phase = get_phase_run(db, workspace_id, PhaseKey.COMMUNICATION.value)
+def _maybe_escalation_3(db: Session, workspace_id: int, cycle_id: int) -> None:
+    phase = get_phase_run(db, cycle_id, PhaseKey.COMMUNICATION.value)
     if phase.status != PhaseStatus.ACTIVE.value:
         return
     drafts = (
@@ -401,13 +410,14 @@ def _maybe_escalation_3(db: Session, workspace_id: int) -> None:
         return
     if (
         db.query(Escalation)
-        .filter(Escalation.workspace_id == workspace_id, Escalation.level == 3)
+        .filter(Escalation.cycle_id == cycle_id, Escalation.level == 3)
         .first()
     ):
         return
     create_escalation(
         db,
         workspace_id=workspace_id,
+        cycle_id=cycle_id,
         phase_key=PhaseKey.COMMUNICATION.value,
         level=3,
         title="Утвердите тексты писем",

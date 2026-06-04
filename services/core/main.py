@@ -45,8 +45,12 @@ def startup() -> None:
 
     db = SessionLocal()
     try:
+        from .cycles.service import ensure_default_cycle, ensure_workspace
+        from .competency.service import seed_program_competencies
+
         ws = ensure_workspace(db)
-        seed_program_competencies(db, ws.id)
+        cycle = ensure_default_cycle(db, ws)
+        seed_program_competencies(db, ws.id, cycle_id=cycle.id)
     finally:
         db.close()
     logger.info("Core DB initialized")

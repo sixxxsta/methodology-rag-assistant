@@ -15,7 +15,9 @@ from ..models import (
     Project,
     ProjectRole,
 )
-from ..services import ensure_workspace, get_phase_run, log_action
+from ..cycles.service import get_phase_run, get_work_context
+from ..services import log_action
+from ..services import log_action
 from .generator import competencies_for_workspace, parse_tz_response, tz_prompt
 from .roles import list_project_roles, sync_roles_from_spec
 from .enrollment import (
@@ -50,23 +52,25 @@ def _project_dict(p: Project, company_name: str | None = None) -> dict:
 
 
 def dashboard(db: Session) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     partners = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.status == "partner")
+        .filter(Company.cycle_id == cid, Company.status == "partner")
         .order_by(Company.name)
         .all()
     )
     agreements = (
         db.query(PartnerAgreement)
         .join(Company, PartnerAgreement.company_id == Company.id)
-        .filter(Company.workspace_id == ws.id)
+        .filter(Company.cycle_id == cid)
         .order_by(PartnerAgreement.created_at.desc())
         .all()
     )
     projects = (
         db.query(Project)
-        .filter(Project.workspace_id == ws.id)
+        .filter(Project.cycle_id == cid)
         .order_by(Project.updated_at.desc())
         .all()
     )
@@ -94,7 +98,7 @@ def dashboard(db: Session) -> dict:
     draft = sum(1 for p in projects if p.status == "draft")
     approved = sum(1 for p in projects if p.status == "approved")
 
-    phase = get_phase_run(db, ws.id, PhaseKey.PROJECTS.value)
+    phase = get_phase_run(db, cid, PhaseKey.PROJECTS.value)
 
     return {
         "phase_status": phase.status,
@@ -116,10 +120,12 @@ def generate_project(
     actor_email: str,
     agreement_id: int | None = None,
 ) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     company = (
         db.query(Company)
-        .filter(Company.workspace_id == ws.id, Company.id == company_id)
+        .filter(Company.cycle_id == cid, Company.id == company_id)
         .one()
     )
     agr_q = db.query(PartnerAgreement).filter(PartnerAgreement.company_id == company.id)
@@ -131,7 +137,7 @@ def generate_project(
 
     comps = (
         db.query(Competency)
-        .filter(Competency.workspace_id == ws.id)
+        .filter(Competency.cycle_id == cid)
         .all()
     )
     top_skills = competencies_for_workspace(comps)
@@ -148,7 +154,7 @@ def generate_project(
     project = (
         db.query(Project)
         .filter(
-            Project.workspace_id == ws.id,
+            Project.cycle_id == cid,
             Project.agreement_id == agreement.id,
         )
         .first()
@@ -156,6 +162,7 @@ def generate_project(
     if not project:
         project = Project(
             workspace_id=ws.id,
+            cycle_id=cid,
             company_id=company.id,
             agreement_id=agreement.id,
             title=title,
@@ -176,7 +183,7 @@ def generate_project(
     project.approved_at = None
     project.published_at = None
 
-    phase = get_phase_run(db, ws.id, PhaseKey.PROJECTS.value)
+    phase = get_phase_run(db, cid, PhaseKey.PROJECTS.value)
     if phase.status == PhaseStatus.ACTIVE.value and phase.progress_pct < 50:
         phase.progress_pct = min(50, phase.progress_pct + 20)
 
@@ -205,10 +212,12 @@ def update_project(
     duration_weeks: int | None = None,
     competencies: str | None = None,
 ) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     project = (
         db.query(Project)
-        .filter(Project.workspace_id == ws.id, Project.id == project_id)
+        .filter(Project.cycle_id == cid, Project.id == project_id)
         .one()
     )
     if title is not None:
@@ -240,10 +249,12 @@ def update_project(
 
 
 def approve_project(db: Session, project_id: int, *, actor_email: str) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     project = (
         db.query(Project)
-        .filter(Project.workspace_id == ws.id, Project.id == project_id)
+        .filter(Project.cycle_id == cid, Project.id == project_id)
         .one()
     )
     if not project.spec_markdown:
@@ -253,7 +264,7 @@ def approve_project(db: Session, project_id: int, *, actor_email: str) -> dict:
     project.approved_by = actor_email
     project.approved_at = datetime.now(timezone.utc)
 
-    phase = get_phase_run(db, ws.id, PhaseKey.PROJECTS.value)
+    phase = get_phase_run(db, cid, PhaseKey.PROJECTS.value)
     if phase.status == PhaseStatus.ACTIVE.value:
         phase.progress_pct = max(phase.progress_pct, 70)
 
@@ -274,10 +285,12 @@ def approve_project(db: Session, project_id: int, *, actor_email: str) -> dict:
 
 
 def publish_to_catalog(db: Session, project_id: int, *, actor_email: str) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     project = (
         db.query(Project)
-        .filter(Project.workspace_id == ws.id, Project.id == project_id)
+        .filter(Project.cycle_id == cid, Project.id == project_id)
         .one()
     )
     if project.status != "approved":
@@ -289,11 +302,11 @@ def publish_to_catalog(db: Session, project_id: int, *, actor_email: str) -> dic
 
     published_count = (
         db.query(Project)
-        .filter(Project.workspace_id == ws.id, Project.catalog_visible.is_(True))
+        .filter(Project.cycle_id == cid, Project.catalog_visible.is_(True))
         .count()
     )
 
-    phase = get_phase_run(db, ws.id, PhaseKey.PROJECTS.value)
+    phase = get_phase_run(db, cid, PhaseKey.PROJECTS.value)
     if phase.status == PhaseStatus.ACTIVE.value:
         phase.progress_pct = min(100, 50 + published_count * 15)
 
@@ -331,23 +344,24 @@ def _catalog_meta(db: Session, project: Project) -> dict:
 
 
 def list_catalog(db: Session, *, competencies: list[str] | None = None) -> list[dict]:
-    ws = ensure_workspace(db)
+    from ..models import PartnershipCycle
+
     needles = [c.strip().lower() for c in (competencies or []) if c.strip()]
     rows = (
-        db.query(Project, Company)
+        db.query(Project, Company, PartnershipCycle)
         .outerjoin(Company, Project.company_id == Company.id)
-        .filter(
-            Project.workspace_id == ws.id,
-            Project.catalog_visible.is_(True),
-        )
+        .join(PartnershipCycle, Project.cycle_id == PartnershipCycle.id)
+        .filter(Project.catalog_visible.is_(True))
         .order_by(Project.published_at.desc())
         .all()
     )
     out: list[dict] = []
-    for proj, co in rows:
+    for proj, co, cycle in rows:
         if not _matches_competencies(proj, needles):
             continue
         item = _project_dict(proj, co.name if co else None)
+        item["cycle_id"] = cycle.id
+        item["cycle_name"] = cycle.name
         item.pop("spec_markdown", None)
         item.update(_catalog_meta(db, proj))
         out.append(item)
@@ -357,12 +371,14 @@ def list_catalog(db: Session, *, competencies: list[str] | None = None) -> list[
 def get_catalog_project(
     db: Session, project_id: int, *, viewer_email: str | None = None
 ) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     row = (
         db.query(Project, Company)
         .outerjoin(Company, Project.company_id == Company.id)
         .filter(
-            Project.workspace_id == ws.id,
+            Project.cycle_id == cid,
             Project.id == project_id,
             Project.catalog_visible.is_(True),
         )
@@ -393,10 +409,12 @@ def get_catalog_project(
 
 
 def get_project(db: Session, project_id: int) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     project = (
         db.query(Project)
-        .filter(Project.workspace_id == ws.id, Project.id == project_id)
+        .filter(Project.cycle_id == cid, Project.id == project_id)
         .one()
     )
     company_name = None
@@ -407,16 +425,18 @@ def get_project(db: Session, project_id: int) -> dict:
 
 
 def complete_projects_phase(db: Session, *, actor_email: str) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     published = (
         db.query(Project)
-        .filter(Project.workspace_id == ws.id, Project.catalog_visible.is_(True))
+        .filter(Project.cycle_id == cid, Project.catalog_visible.is_(True))
         .count()
     )
     if published < 1:
         raise ValueError("publish at least one project to catalog")
 
-    phase = get_phase_run(db, ws.id, PhaseKey.PROJECTS.value)
+    phase = get_phase_run(db, cid, PhaseKey.PROJECTS.value)
     phase.status = PhaseStatus.COMPLETED.value
     phase.progress_pct = 100
 
@@ -431,10 +451,12 @@ def complete_projects_phase(db: Session, *, actor_email: str) -> dict:
 
 
 def resync_project_roles(db: Session, project_id: int, *, actor_email: str) -> dict:
-    ws = ensure_workspace(db)
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
     project = (
         db.query(Project)
-        .filter(Project.workspace_id == ws.id, Project.id == project_id)
+        .filter(Project.cycle_id == cid, Project.id == project_id)
         .one()
     )
     roles = sync_roles_from_spec(db, project)
