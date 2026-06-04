@@ -5,39 +5,50 @@ import (
 	"testing"
 )
 
-func TestRoleForEmail(t *testing.T) {
+func TestResolveRole(t *testing.T) {
 	h := &Handlers{AdminEmail: "admin@example.com"}
 
-	if got := h.roleForEmail("admin@example.com"); got != RoleAdmin {
+	user := &User{Email: "admin@example.com", Role: RoleStudent}
+	if got := h.resolveRole(user); got != RoleAdmin {
 		t.Fatalf("expected admin, got %s", got)
 	}
-	if got := h.roleForEmail("Admin@Example.com"); got != RoleAdmin {
-		t.Fatalf("expected admin (case insensitive), got %s", got)
+
+	user = &User{Email: "curator@example.com", Role: RoleUser}
+	if got := h.resolveRole(user); got != RoleCurator {
+		t.Fatalf("expected curator (legacy user), got %s", got)
 	}
-	if got := h.roleForEmail("user@example.com"); got != RoleUser {
-		t.Fatalf("expected user, got %s", got)
+
+	user = &User{Email: "student@example.com", Role: RoleStudent}
+	if got := h.resolveRole(user); got != RoleStudent {
+		t.Fatalf("expected student, got %s", got)
 	}
 }
 
-func TestRegisterFirstUserIsNotAdmin(t *testing.T) {
+func TestRegisterCreatesStudent(t *testing.T) {
 	store, err := NewStore(filepath.Join(t.TempDir(), "users.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	h := &Handlers{AdminEmail: "admin@example.com"}
-	role := h.roleForEmail("first@example.com")
-	if role != RoleUser {
-		t.Fatalf("first registrant must be user, got %s", role)
+	h := &Handlers{Store: store, AdminEmail: "admin@example.com"}
+	if err := h.validateStudentRegistration("student@example.com"); err != nil {
+		t.Fatal(err)
 	}
 
-	user, err := store.CreateUser("first@example.com", "secret12", role)
+	user, err := store.CreateUser("student@example.com", "secret12", RoleStudent)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if user.Role != RoleUser {
-		t.Fatalf("stored role = %s, want user", user.Role)
+	if user.Role != RoleStudent {
+		t.Fatalf("stored role = %s, want student", user.Role)
+	}
+}
+
+func TestRegisterRejectsAdminEmail(t *testing.T) {
+	h := &Handlers{AdminEmail: "admin@example.com"}
+	if err := h.validateStudentRegistration("admin@example.com"); err == nil {
+		t.Fatal("expected registration to be rejected for admin email")
 	}
 }
 
@@ -58,7 +69,19 @@ func TestSyncUserRoleDemotesFormerAdmin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if updated.Role != RoleUser {
-		t.Fatalf("role = %s, want user after sync", updated.Role)
+	if updated.Role != RoleAdmin {
+		t.Fatalf("role = %s, want admin preserved when not matching ADMIN_EMAIL", updated.Role)
+	}
+
+	user2, err := store.CreateUser("real@example.com", "secret12", RoleStudent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated2, err := h.syncUserRole(user2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated2.Role != RoleAdmin {
+		t.Fatalf("role = %s, want admin after sync for ADMIN_EMAIL", updated2.Role)
 	}
 }

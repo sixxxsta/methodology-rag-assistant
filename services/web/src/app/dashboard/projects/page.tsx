@@ -1,8 +1,9 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
 import {
   approveProject,
@@ -10,9 +11,10 @@ import {
   fetchProjectsDashboard,
   generateProjectTz,
   publishProject,
+  syncProjectRoles,
   updateProject,
 } from "@/lib/api";
-import { getUser, isAdmin } from "@/lib/auth";
+import { canUseEdAgent, getUser } from "@/lib/auth";
 import clsx from "clsx";
 import { ArrowLeft, BookOpen, FileText, Loader2 } from "lucide-react";
 
@@ -25,7 +27,7 @@ export default function ProjectsPage() {
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [editSpec, setEditSpec] = useState("");
-  const admin = isAdmin(getUser());
+  const canEdit = canUseEdAgent(getUser());
 
   const load = useCallback(async () => {
     setError("");
@@ -58,6 +60,7 @@ export default function ProjectsPage() {
 
   return (
     <AuthGuard>
+      <CuratorGuard>
       <div className="flex min-h-screen flex-col md:flex-row">
         <Sidebar className="md:sticky md:top-0 md:h-screen" />
         <main className="flex-1 p-6 md:p-10">
@@ -115,7 +118,7 @@ export default function ProjectsPage() {
                           {p.project_status || "нет ТЗ"}
                         </span>
                       </p>
-                      {admin && (
+                      {canEdit && (
                         <button
                           type="button"
                           disabled={busy}
@@ -184,9 +187,9 @@ export default function ProjectsPage() {
                               onChange={(e) => setEditSpec(e.target.value)}
                               rows={12}
                               className="w-full rounded-lg border border-border bg-surface px-3 py-2 font-mono text-xs"
-                              readOnly={!admin}
+                              readOnly={!canEdit}
                             />
-                            {admin && (
+                            {canEdit && (
                               <div className="flex flex-wrap gap-2">
                                 <button
                                   type="button"
@@ -205,6 +208,24 @@ export default function ProjectsPage() {
                                   className="rounded-lg border border-border px-3 py-1.5 text-xs"
                                 >
                                   Сохранить правки
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={busy}
+                                  onClick={async () => {
+                                    setBusy(true);
+                                    try {
+                                      await syncProjectRoles(proj.id);
+                                      await load();
+                                    } catch (e) {
+                                      setError(e instanceof Error ? e.message : "Ошибка");
+                                    } finally {
+                                      setBusy(false);
+                                    }
+                                  }}
+                                  className="rounded-lg border border-border px-3 py-1.5 text-xs"
+                                >
+                                  Обновить роли из ТЗ
                                 </button>
                                 {proj.status === "draft" && (
                                   <button
@@ -252,7 +273,7 @@ export default function ProjectsPage() {
                 )}
               </section>
 
-              {admin && data.catalog_published >= 1 && data.phase_status === "active" && (
+              {canEdit && data.catalog_published >= 1 && data.phase_status === "active" && (
                 <button
                   type="button"
                   disabled={busy}
@@ -276,6 +297,7 @@ export default function ProjectsPage() {
           )}
         </main>
       </div>
+    </CuratorGuard>
     </AuthGuard>
   );
 }

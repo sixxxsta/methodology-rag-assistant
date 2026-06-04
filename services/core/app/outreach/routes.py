@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..security import require_internal
+from ..security import require_curator, require_edagent
 from .service import (
     dashboard,
     mark_opened,
@@ -38,7 +38,7 @@ class AgreementIn(BaseModel):
 @router.get("/dashboard")
 def outreach_dashboard(
     db: Session = Depends(get_db),
-    user: Annotated[dict[str, str], Depends(require_internal)] = None,
+    user: Annotated[dict[str, str], Depends(require_edagent)] = None,
 ):
     return dashboard(db)
 
@@ -48,10 +48,8 @@ def send(
     comm_id: int,
     body: SendIn,
     db: Session = Depends(get_db),
-    user: Annotated[dict[str, str], Depends(require_internal)] = None,
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
 ):
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="admin required")
     try:
         return send_letter(
             db, comm_id, actor_email=user["email"], use_smtp=body.use_smtp
@@ -66,10 +64,8 @@ def send(
 def opened(
     comm_id: int,
     db: Session = Depends(get_db),
-    user: Annotated[dict[str, str], Depends(require_internal)] = None,
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
 ):
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="admin required")
     return mark_opened(db, comm_id, actor_email=user["email"])
 
 
@@ -78,7 +74,7 @@ def inbound(
     company_id: int,
     body: InboundIn,
     db: Session = Depends(get_db),
-    user: Annotated[dict[str, str], Depends(require_internal)] = None,
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
 ):
     try:
         return record_inbound(
@@ -99,11 +95,19 @@ def inbound(
 def followup_send(
     touch_id: int,
     db: Session = Depends(get_db),
-    user: Annotated[dict[str, str], Depends(require_internal)] = None,
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
 ):
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="admin required")
     return send_followup(db, touch_id, actor_email=user["email"])
+
+
+@router.post("/imap/poll")
+def imap_poll(
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
+):
+    from .imap_poller import poll_imap_inbox
+
+    return poll_imap_inbox(db)
 
 
 @router.post("/companies/{company_id}/agreement")
@@ -111,10 +115,8 @@ def agreement(
     company_id: int,
     body: AgreementIn,
     db: Session = Depends(get_db),
-    user: Annotated[dict[str, str], Depends(require_internal)] = None,
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
 ):
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403, detail="admin required")
     try:
         return record_agreement(
             db,

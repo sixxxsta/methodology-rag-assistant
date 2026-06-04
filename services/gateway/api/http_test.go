@@ -29,6 +29,9 @@ func (m *mockRAG) Feedback(context.Context, rag.FeedbackPayload) error { return 
 func (m *mockRAG) Health(context.Context) (map[string]any, error) {
 	return map[string]any{"status": "ok"}, nil
 }
+func (m *mockRAG) Ready(context.Context) (map[string]any, error) {
+	return map[string]any{"status": "ready"}, nil
+}
 func (m *mockRAG) Ingest(context.Context) (rag.IngestResult, error) {
 	return rag.IngestResult{Files: 1, Chunks: 5}, nil
 }
@@ -43,7 +46,7 @@ func testServer(t *testing.T) (*HTTPServer, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	user, err := store.CreateUser("u@test.com", "secret12", auth.RoleUser)
+	user, err := store.CreateUser("u@test.com", "secret12", auth.RoleStudent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +55,7 @@ func testServer(t *testing.T) (*HTTPServer, string) {
 		t.Fatal(err)
 	}
 	h := &auth.Handlers{Store: store, Issuer: issuer}
-	srv := NewHTTPServer(&mockRAG{}, h, nil, issuer, "", nil)
+	srv := NewHTTPServer(&mockRAG{}, h, nil, issuer, "", "", nil)
 	t.Cleanup(func() { _ = store.Close() })
 	return srv, token
 }
@@ -88,9 +91,9 @@ func TestHTTPServerChatError(t *testing.T) {
 	t.Cleanup(func() { _ = store.Close() })
 	issuer, _ := auth.NewTokenIssuer("test-secret-key-32chars-min", 24)
 	_ = store
-	token, _ := issuer.Sign(&auth.User{ID: 1, Email: "a@b.c", Role: auth.RoleUser})
+	token, _ := issuer.Sign(&auth.User{ID: 1, Email: "a@b.c", Role: auth.RoleStudent})
 
-	srv := NewHTTPServer(&mockRAG{err: errors.New("down")}, &auth.Handlers{Store: store, Issuer: issuer}, nil, issuer, "", nil)
+	srv := NewHTTPServer(&mockRAG{err: errors.New("down")}, &auth.Handlers{Store: store, Issuer: issuer}, nil, issuer, "", "", nil)
 	req := httptest.NewRequest(http.MethodPost, "/api/chat", bytes.NewBufferString(`{"message":"x"}`))
 	req.Header.Set("Authorization", "Bearer "+token)
 	rr := httptest.NewRecorder()

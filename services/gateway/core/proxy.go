@@ -33,6 +33,15 @@ func NewProxy(baseURL, internalSecret string) (*Proxy, error) {
 	return &Proxy{proxy: rp, internalSecret: internalSecret}, nil
 }
 
+func (p *Proxy) PublicHandler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if p.internalSecret != "" {
+			r.Header.Set("X-Core-Internal-Key", p.internalSecret)
+		}
+		p.proxy.ServeHTTP(w, r)
+	})
+}
+
 func (p *Proxy) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims, ok := auth.ClaimsFromContext(r.Context())
@@ -52,6 +61,9 @@ func (p *Proxy) Handler() http.Handler {
 		r.Header.Set("X-User-Role", claims.Role)
 		if p.internalSecret != "" {
 			r.Header.Set("X-Core-Internal-Key", p.internalSecret)
+		}
+		if cid := r.Header.Get("X-Correlation-Id"); cid != "" {
+			r.Header.Set("X-Correlation-Id", cid)
 		}
 
 		p.proxy.ServeHTTP(w, r)

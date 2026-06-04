@@ -15,6 +15,8 @@ from ..models import (
     PhaseKey,
     PhaseStatus,
     PhaseRun,
+    ProjectEnrollment,
+    StudentProfile,
     TouchPoint,
 )
 from ..services import (
@@ -25,8 +27,11 @@ from ..services import (
     unlock_next_phase,
     update_phase,
 )
+from ..config import get_settings
 from .classifier import auto_reply_for, classify_response
 from .mailer import send_email, smtp_configured
+from .outcomes import record_outcome
+from .tracking import new_tracking_token, tracking_pixel_url
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +46,7 @@ def _comm_out(comm: Communication, company: Company) -> dict:
         "body": comm.body,
         "status": comm.status,
         "delivery_status": comm.delivery_status,
+        "tracking_token": comm.tracking_token,
         "sent_at": comm.sent_at.isoformat() if comm.sent_at else None,
         "delivered_at": comm.delivered_at.isoformat() if comm.delivered_at else None,
         "opened_at": comm.opened_at.isoformat() if comm.opened_at else None,
@@ -60,6 +66,8 @@ def dashboard(db: Session) -> dict:
         .all()
     )
     sent = sum(1 for c in approved if c.delivery_status in ("sent", "delivered", "opened"))
+    delivered = sum(1 for c in approved if c.delivery_status in ("delivered", "opened"))
+    opened = sum(1 for c in approved if c.delivery_status == "opened")
     pending = len(approved) - sent
 
     responses = (
@@ -97,6 +105,8 @@ def dashboard(db: Session) -> dict:
         ],
         "letters_approved": len(approved),
         "letters_sent": sent,
+        "letters_delivered": delivered,
+        "letters_opened": opened,
         "letters_pending": pending,
         "inbound_count": len(responses),
         "followups_due": len(due_followups),
@@ -125,6 +135,12 @@ def _interaction_dict(db: Session, i: Interaction) -> dict:
     }
 
 
+def _interaction_dict_extended(db: Session, i: Interaction, **extra) -> dict:
+    base = _interaction_dict(db, i)
+    base.update(extra)
+    return base
+
+
 def send_letter(
     db: Session,
     comm_id: int,
@@ -138,17 +154,43 @@ def send_letter(
     company = db.query(Company).filter(Company.id == comm.company_id).one()
     ws = ensure_workspace(db)
 
+    if not comm.tracking_token:
+        comm.tracking_token = new_tracking_token()
+
+    settings = get_settings()
+    pixel_url = None
+    if settings.outreach_tracking_base_url:
+        pixel_url = tracking_pixel_url(comm.tracking_token, settings.outreach_tracking_base_url)
+
     if use_smtp and smtp_configured():
         if not company.contact_email:
             raise ValueError("company has no contact email")
-        send_email(to=company.contact_email, subject=comm.subject, body=comm.body)
-        comm.delivery_status = "sent"
+        if settings.email_queue_enabled:
+            from .outbox import enqueue_email
+
+            enqueue_email(
+                db,
+                communication_id=comm.id,
+                to_email=company.contact_email,
+                subject=comm.subject,
+                body=comm.body,
+                tracking_token=comm.tracking_token,
+            )
+            comm.delivery_status = "queued"
+        else:
+            send_email(
+                to=company.contact_email,
+                subject=comm.subject,
+                body=comm.body,
+                tracking_pixel_url=pixel_url,
+            )
+            comm.delivery_status = "sent"
     else:
         comm.delivery_status = "sent_manual"
 
     now = datetime.now(timezone.utc)
-    comm.sent_at = now
-    comm.delivered_at = now
+    if comm.delivery_status != "queued":
+        comm.sent_at = now
     comm.status = "sent"
 
     tp = (
@@ -250,10 +292,18 @@ def send_followup(db: Session, touch_id: int, *, actor_email: str) -> dict:
     tp = db.query(TouchPoint).filter(TouchPoint.id == touch_id).one()
     company = db.query(Company).filter(Company.id == tp.company_id).one()
     ws = ensure_workspace(db)
+    settings = get_settings()
 
     prompt = f"""Напиши короткое follow-up письмо (напоминание) для {company.name}.
 Контекст: ранее отправляли приглашение к партнёрству с УрФУ, ответа не было.
 Тон вежливый, 5-8 предложений, call-to-action — короткий созвон."""
+    if settings.strategy_memory_enabled:
+        from ..memory.strategy import get_strategy_hints
+
+        hints = get_strategy_hints(db, category="followup", tone="formal")
+        if hints:
+            prompt = f"{hints}\n\n---\n\n{prompt}"
+
     body = generate_text(prompt)
     subject = f"Re: Партнёрство УрФУ — {company.name}"
 
@@ -276,6 +326,20 @@ def send_followup(db: Session, touch_id: int, *, actor_email: str) -> dict:
     return {"touch_id": touch_id, "company_name": company.name, "subject": subject}
 
 
+def process_due_followups_auto(db: Session) -> dict:
+    ws = ensure_workspace(db)
+    due = _due_touchpoints(db, ws.id)
+    sent: list[int] = []
+    errors: list[str] = []
+    for item in due:
+        try:
+            send_followup(db, item["touch_id"], actor_email="system@edagent")
+            sent.append(item["touch_id"])
+        except Exception as exc:
+            errors.append(f"{item['touch_id']}: {exc}")
+    return {"due": len(due), "sent": len(sent), "errors": errors}
+
+
 def record_inbound(
     db: Session,
     company_id: int,
@@ -295,7 +359,8 @@ def record_inbound(
         raise ValueError(
             f"компания с id={company_id} не найдена. Выберите компанию из списка на странице «Компании»."
         )
-    classification = classify_response(subject, body)
+    classification_result = classify_response(subject, body)
+    classification = classification_result.category
     auto_handled = False
     auto_reply = None
 
@@ -326,9 +391,25 @@ def record_inbound(
         auto_handled=auto_handled,
     )
     db.add(interaction)
+    db.flush()
 
     if classification in ("interest", "meeting_request"):
         _escalation_4(db, ws.id, company.name, classification)
+
+    if classification == "reject":
+        record_outcome(
+            db,
+            workspace_id=ws.id,
+            company_id=company.id,
+            outcome="fail",
+            actor_email=actor_email,
+            interaction_id=interaction.id,
+            features={
+                "classification": classification,
+                "classification_confidence": classification_result.confidence,
+                "classification_method": classification_result.method,
+            },
+        )
 
     log_action(
         db,
@@ -341,7 +422,12 @@ def record_inbound(
     db.commit()
     db.refresh(interaction)
     return {
-        **_interaction_dict(db, interaction),
+        **_interaction_dict_extended(
+            db,
+            interaction,
+            classification_confidence=classification_result.confidence,
+            classification_method=classification_result.method,
+        ),
         "auto_reply": auto_reply,
         "needs_human": classification in ("interest", "meeting_request"),
     }
@@ -395,6 +481,27 @@ def record_agreement(
     )
     db.add(agr)
     company.status = "partner"
+
+    last_comm = (
+        db.query(Communication)
+        .filter(
+            Communication.company_id == company.id,
+            Communication.comm_type.in_(("letter", "followup")),
+        )
+        .order_by(Communication.sent_at.desc().nullslast(), Communication.created_at.desc())
+        .first()
+    )
+
+    record_outcome(
+        db,
+        workspace_id=ws.id,
+        company_id=company.id,
+        outcome="success",
+        actor_email=actor_email,
+        communication_id=last_comm.id if last_comm else None,
+        features={"agreement_status": status, "summary_len": len(summary)},
+        notes=summary[:500],
+    )
 
     phase = get_phase_run(db, ws.id, PhaseKey.OUTREACH.value)
     if phase.status == PhaseStatus.ACTIVE.value:

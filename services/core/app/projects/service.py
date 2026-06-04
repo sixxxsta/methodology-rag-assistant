@@ -13,9 +13,18 @@ from ..models import (
     PhaseRun,
     PhaseStatus,
     Project,
+    ProjectRole,
 )
 from ..services import ensure_workspace, get_phase_run, log_action
 from .generator import competencies_for_workspace, parse_tz_response, tz_prompt
+from .roles import list_project_roles, sync_roles_from_spec
+from .enrollment import (
+    active_enrollment_count,
+    enroll_student,
+    get_student_enrollment,
+    list_my_enrollments,
+    withdraw_enrollment,
+)
 
 
 def _project_dict(p: Project, company_name: str | None = None) -> dict:
@@ -180,6 +189,8 @@ def generate_project(
     )
     db.commit()
     db.refresh(project)
+    sync_roles_from_spec(db, project)
+    db.commit()
     return _project_dict(project, company.name)
 
 
@@ -274,6 +285,7 @@ def publish_to_catalog(db: Session, project_id: int, *, actor_email: str) -> dic
 
     project.catalog_visible = True
     project.published_at = datetime.now(timezone.utc)
+    sync_roles_from_spec(db, project)
 
     published_count = (
         db.query(Project)
@@ -301,8 +313,26 @@ def publish_to_catalog(db: Session, project_id: int, *, actor_email: str) -> dic
     return _project_dict(project, company_name)
 
 
-def list_catalog(db: Session) -> list[dict]:
+def _matches_competencies(project: Project, filters: list[str]) -> bool:
+    if not filters:
+        return True
+    haystack = (project.competencies or "").lower()
+    return any(needle in haystack for needle in filters)
+
+
+def _catalog_meta(db: Session, project: Project) -> dict:
+    team_size = project.team_size or 4
+    enrolled = active_enrollment_count(db, project.id)
+    return {
+        "enrollment_count": enrolled,
+        "seats_left": max(0, team_size - enrolled),
+        "team_size": team_size,
+    }
+
+
+def list_catalog(db: Session, *, competencies: list[str] | None = None) -> list[dict]:
     ws = ensure_workspace(db)
+    needles = [c.strip().lower() for c in (competencies or []) if c.strip()]
     rows = (
         db.query(Project, Company)
         .outerjoin(Company, Project.company_id == Company.id)
@@ -315,10 +345,51 @@ def list_catalog(db: Session) -> list[dict]:
     )
     out: list[dict] = []
     for proj, co in rows:
+        if not _matches_competencies(proj, needles):
+            continue
         item = _project_dict(proj, co.name if co else None)
         item.pop("spec_markdown", None)
+        item.update(_catalog_meta(db, proj))
         out.append(item)
     return out
+
+
+def get_catalog_project(
+    db: Session, project_id: int, *, viewer_email: str | None = None
+) -> dict:
+    ws = ensure_workspace(db)
+    row = (
+        db.query(Project, Company)
+        .outerjoin(Company, Project.company_id == Company.id)
+        .filter(
+            Project.workspace_id == ws.id,
+            Project.id == project_id,
+            Project.catalog_visible.is_(True),
+        )
+        .one()
+    )
+    proj, co = row
+    data = _project_dict(proj, co.name if co else None)
+    data.update(_catalog_meta(db, proj))
+    data["roles"] = list_project_roles(db, proj.id)
+
+    if viewer_email:
+        enrollment = get_student_enrollment(db, proj.id, viewer_email.lower())
+        if enrollment and enrollment.status == "active":
+            role_title = None
+            if enrollment.role_id:
+                role = db.query(ProjectRole).filter(ProjectRole.id == enrollment.role_id).one_or_none()
+                role_title = role.title if role else None
+            data["my_enrollment"] = {
+                "id": enrollment.id,
+                "role_id": enrollment.role_id,
+                "role_title": role_title,
+                "status": enrollment.status,
+            }
+        else:
+            data["my_enrollment"] = None
+
+    return data
 
 
 def get_project(db: Session, project_id: int) -> dict:
@@ -357,3 +428,22 @@ def complete_projects_phase(db: Session, *, actor_email: str) -> dict:
     )
     db.commit()
     return {"status": "completed", "catalog_published": published}
+
+
+def resync_project_roles(db: Session, project_id: int, *, actor_email: str) -> dict:
+    ws = ensure_workspace(db)
+    project = (
+        db.query(Project)
+        .filter(Project.workspace_id == ws.id, Project.id == project_id)
+        .one()
+    )
+    roles = sync_roles_from_spec(db, project)
+    log_action(
+        db,
+        workspace_id=ws.id,
+        actor_email=actor_email,
+        action="projects.roles.sync",
+        entity_id=str(project_id),
+    )
+    db.commit()
+    return {"roles": roles}

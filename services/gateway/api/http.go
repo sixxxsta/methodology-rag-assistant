@@ -2,22 +2,29 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"methodology-rag-assistant/admin"
 	"methodology-rag-assistant/auth"
 	"methodology-rag-assistant/core"
 	"methodology-rag-assistant/rag"
+	"methodology-rag-assistant/ratelimit"
 )
 
 type HTTPServer struct {
-	ragClient  rag.Service
-	auth       *auth.Handlers
-	admin      *admin.Handlers
-	issuer     *auth.TokenIssuer
-	adminEmail string
-	coreProxy  *core.Proxy
+	ragClient      rag.Service
+	auth           *auth.Handlers
+	admin          *admin.Handlers
+	issuer         *auth.TokenIssuer
+	adminEmail     string
+	coreServiceURL string
+	coreProxy      *core.Proxy
+	httpClient     *http.Client
+	rateLimit      *ratelimit.Middleware
 }
 
 func NewHTTPServer(
@@ -26,15 +33,21 @@ func NewHTTPServer(
 	adminHandlers *admin.Handlers,
 	issuer *auth.TokenIssuer,
 	adminEmail string,
+	coreServiceURL string,
 	coreProxy *core.Proxy,
+	rateLimitRegister int,
+	rateLimitChat int,
 ) *HTTPServer {
 	return &HTTPServer{
-		ragClient:  ragClient,
-		auth:       authHandlers,
-		admin:      adminHandlers,
-		issuer:     issuer,
-		adminEmail: adminEmail,
-		coreProxy:  coreProxy,
+		ragClient:      ragClient,
+		auth:           authHandlers,
+		admin:          adminHandlers,
+		issuer:         issuer,
+		adminEmail:     adminEmail,
+		coreServiceURL: strings.TrimRight(coreServiceURL, "/"),
+		coreProxy:      coreProxy,
+		httpClient:     &http.Client{Timeout: 10 * time.Second},
+		rateLimit:      ratelimit.New(rateLimitRegister, rateLimitChat),
 	}
 }
 
@@ -46,9 +59,11 @@ func (s *HTTPServer) Handler() http.Handler {
 
 	authMW := auth.Middleware(s.issuer)
 	mux.Handle("GET /api/auth/me", authMW(http.HandlerFunc(s.auth.Me)))
+	mux.Handle("DELETE /api/auth/account", authMW(http.HandlerFunc(s.auth.DeleteAccount)))
 	mux.Handle("POST /api/chat", authMW(http.HandlerFunc(s.handleChat)))
 	mux.Handle("POST /api/feedback", authMW(http.HandlerFunc(s.handleFeedback)))
 	mux.HandleFunc("GET /api/health", s.handleHealth)
+	mux.HandleFunc("GET /api/ready", s.handleReady)
 
 	admin := func(h http.HandlerFunc) http.Handler {
 		return authMW(auth.AdminOnly(s.adminEmail)(http.HandlerFunc(h)))
@@ -57,14 +72,17 @@ func (s *HTTPServer) Handler() http.Handler {
 	mux.Handle("POST /api/admin/files", admin(s.admin.Upload))
 	mux.Handle("DELETE /api/admin/files/{name}", admin(s.admin.Delete))
 	mux.Handle("POST /api/admin/ingest", admin(s.admin.Ingest))
+	mux.Handle("POST /api/admin/users", admin(s.auth.CreateUser))
 
 	if s.coreProxy != nil {
 		ed := authMW(s.coreProxy.Handler())
 		mux.Handle("/api/ed/", ed)
 		mux.Handle("/api/ed", ed)
+		mux.Handle("/api/outreach/track/", s.coreProxy.PublicHandler())
+		mux.Handle("/api/outreach/webhooks/", s.coreProxy.PublicHandler())
 	}
 
-	return mux
+	return s.rateLimit.Wrap(mux)
 }
 
 type chatRequest struct {
@@ -139,6 +157,52 @@ func (s *HTTPServer) handleFeedback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *HTTPServer) handleReady(w http.ResponseWriter, r *http.Request) {
+	checks := map[string]string{}
+	ready := true
+
+	if _, err := s.ragClient.Ready(r.Context()); err != nil {
+		checks["rag"] = err.Error()
+		ready = false
+	} else {
+		checks["rag"] = "ok"
+	}
+
+	if s.coreServiceURL != "" {
+		if err := s.checkCoreReady(r); err != nil {
+			checks["core"] = err.Error()
+			ready = false
+		} else {
+			checks["core"] = "ok"
+		}
+	}
+
+	status := http.StatusOK
+	state := "ready"
+	if !ready {
+		status = http.StatusServiceUnavailable
+		state = "not_ready"
+	}
+	writeJSON(w, status, map[string]any{"status": state, "checks": checks})
+}
+
+func (s *HTTPServer) checkCoreReady(r *http.Request) error {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, s.coreServiceURL+"/api/ready", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := s.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("core ready returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+	return nil
 }
 
 func (s *HTTPServer) handleHealth(w http.ResponseWriter, r *http.Request) {

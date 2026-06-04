@@ -5,6 +5,8 @@ from typing import Any
 
 import httpx
 
+from ..hh_cache import cached_json_get
+
 logger = logging.getLogger(__name__)
 
 HH_API = "https://api.hh.ru"
@@ -32,9 +34,7 @@ def search_employers(
             if area_id:
                 params["area"] = area_id
 
-            resp = client.get(f"{HH_API}/employers", params=params)
-            resp.raise_for_status()
-            payload = resp.json()
+            payload = cached_json_get(client, f"{HH_API}/employers", params=params)
             items = payload.get("items") or []
             if not items:
                 break
@@ -57,11 +57,12 @@ def search_employers(
 
 def _fetch_employer(client: httpx.Client, employer_id: str) -> dict[str, Any] | None:
     try:
-        resp = client.get(f"{HH_API}/employers/{employer_id}")
-        if resp.status_code == 404:
+        return cached_json_get(client, f"{HH_API}/employers/{employer_id}")
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 404:
             return None
-        resp.raise_for_status()
-        return resp.json()
+        logger.warning("employer %s: %s", employer_id, exc)
+        return None
     except httpx.HTTPError as exc:
         logger.warning("employer %s: %s", employer_id, exc)
         return None

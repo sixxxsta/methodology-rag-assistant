@@ -5,6 +5,8 @@ from typing import Any
 
 import httpx
 
+from ..hh_cache import cached_json_get
+
 logger = logging.getLogger(__name__)
 
 HH_API = "https://api.hh.ru"
@@ -42,9 +44,7 @@ class HeadHunterClient:
                 if area_id:
                     params["area"] = area_id
 
-                resp = client.get(f"{HH_API}/vacancies", params=params)
-                resp.raise_for_status()
-                payload = resp.json()
+                payload = cached_json_get(client, f"{HH_API}/vacancies", params=params)
                 items = payload.get("items") or []
                 if not items:
                     break
@@ -68,27 +68,18 @@ class HeadHunterClient:
 
     def _fetch_vacancy(self, client: httpx.Client, vacancy_id: str) -> dict[str, Any] | None:
         try:
-            resp = client.get(f"{HH_API}/vacancies/{vacancy_id}")
-            if resp.status_code == 404:
+            return cached_json_get(client, f"{HH_API}/vacancies/{vacancy_id}")
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 404:
                 return None
-            resp.raise_for_status()
-            return resp.json()
+            logger.warning("HH vacancy %s failed: %s", vacancy_id, exc)
+            return None
         except httpx.HTTPError as exc:
             logger.warning("HH vacancy %s failed: %s", vacancy_id, exc)
             return None
 
     @staticmethod
     def vacancy_text(vacancy: dict[str, Any]) -> str:
-        parts = [
-            vacancy.get("name") or "",
-            vacancy.get("description") or "",
-        ]
-        key_skills = vacancy.get("key_skills") or []
-        for ks in key_skills:
-            if isinstance(ks, dict) and ks.get("name"):
-                parts.append(ks["name"])
-        snippet = vacancy.get("snippet") or {}
-        if isinstance(snippet, dict):
-            parts.append(snippet.get("requirement") or "")
-            parts.append(snippet.get("responsibility") or "")
-        return "\n".join(p for p in parts if p)
+        from .skills import vacancy_text_from_dict
+
+        return vacancy_text_from_dict(vacancy)

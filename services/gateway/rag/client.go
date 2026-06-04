@@ -18,6 +18,7 @@ type Service interface {
 	Chat(ctx context.Context, message, sessionID, language string) (ChatResult, error)
 	Feedback(ctx context.Context, payload FeedbackPayload) error
 	Health(ctx context.Context) (map[string]any, error)
+	Ready(ctx context.Context) (map[string]any, error)
 	Ingest(ctx context.Context) (IngestResult, error)
 }
 
@@ -162,7 +163,15 @@ func (c *Client) Ingest(ctx context.Context) (IngestResult, error) {
 }
 
 func (c *Client) Health(ctx context.Context) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/health", nil)
+	return c.getJSON(ctx, "/health")
+}
+
+func (c *Client) Ready(ctx context.Context) (map[string]any, error) {
+	return c.getJSON(ctx, "/ready")
+}
+
+func (c *Client) getJSON(ctx context.Context, path string) (map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +185,7 @@ func (c *Client) Health(ctx context.Context) (map[string]any, error) {
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("health returned %d", resp.StatusCode)
+		return nil, fmt.Errorf("%s returned %d", path, resp.StatusCode)
 	}
 	var parsed map[string]any
 	if err := json.Unmarshal(respBody, &parsed); err != nil {

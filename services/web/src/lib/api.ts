@@ -20,7 +20,16 @@ function apiErrorMessage(data: unknown, status: number): string {
   if (obj.error) return obj.error;
   if (typeof obj.detail === "string") {
     if (obj.detail === "admin required") {
-      return "Нужна роль admin. Войдите как ADMIN_EMAIL из .env";
+      return "Нужна роль модератора";
+    }
+    if (obj.detail === "curator required") {
+      return "Нужна роль куратора или модератора";
+    }
+    if (obj.detail === "access denied") {
+      return "Недостаточно прав для этого раздела";
+    }
+    if (obj.detail === "student required") {
+      return "Доступно только ученикам";
     }
     return obj.detail;
   }
@@ -125,6 +134,19 @@ export async function ingestKnowledge(): Promise<IngestResult> {
   return handleResponse<IngestResult>(res);
 }
 
+export async function createStaffUser(payload: {
+  email: string;
+  password: string;
+  role: "curator" | "admin";
+}) {
+  const res = await fetch("/api/admin/users", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(payload),
+  });
+  return handleResponse<{ user: User }>(res);
+}
+
 export async function fetchDashboard(): Promise<DashboardData> {
   const res = await fetch("/api/ed/dashboard", { headers: authHeaders() });
   return handleResponse<DashboardData>(res);
@@ -153,20 +175,36 @@ export async function fetchCompetencyStats() {
   }>(res);
 }
 
-export async function collectVacancies(query: string, maxPages = 2) {
+export async function collectVacancies(
+  query: string,
+  maxPages = 2,
+  provider: "hh" | "superjob" = "hh",
+) {
   const res = await fetch("/api/ed/competencies/collect", {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ query, max_pages: maxPages }),
+    body: JSON.stringify({ query, max_pages: maxPages, provider }),
   });
   return handleResponse<{
     vacancies_collected: number;
     vacancies_new: number;
     skills_found: number;
     query: string;
+    provider?: string;
     demo_mode?: boolean;
     message?: string | null;
   }>(res);
+}
+
+export async function exportCompetencyMatrixCsv(): Promise<Blob> {
+  const res = await fetch("/api/ed/competencies/matrix/export?format=csv", {
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || res.statusText);
+  }
+  return res.blob();
 }
 
 export async function fetchCompaniesShortlist() {
@@ -181,6 +219,55 @@ export async function fetchCompaniesTop(n: number) {
   return handleResponse<{ limit: number; total_in_workspace: number; companies: CompanyInfo[] }>(res);
 }
 
+export async function enrichCompaniesBatch(limit = 10) {
+  const res = await fetch("/api/ed/companies/enrich-batch", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ limit }),
+  });
+  return handleResponse<{ attempted: number; enriched: number; errors: string[] }>(res);
+}
+
+export async function downloadPresentationPdf(): Promise<Blob> {
+  const res = await fetch("/api/ed/comms/presentation.pdf", { headers: authHeaders() });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail || res.statusText);
+  }
+  return res.blob();
+}
+
+export async function fetchMemoryStats() {
+  const res = await fetch("/api/ed/memory/stats", { headers: authHeaders() });
+  return handleResponse<{
+    patterns_total: number;
+    patterns_success: number;
+    outcomes_total: number;
+    strategy_memory_enabled: boolean;
+  }>(res);
+}
+
+export async function syncStrategyMemory() {
+  const res = await fetch("/api/ed/memory/sync", {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return handleResponse<{ outcomes_scanned: number; patterns_upserted: number }>(res);
+}
+
+export async function exportQloraDataset() {
+  const res = await fetch("/api/ed/memory/qlora/export", {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return handleResponse<{
+    records: number;
+    source_outcomes: number;
+    path: string;
+    base_model_hint: string;
+  }>(res);
+}
+
 export async function discoverCompanies(query?: string, maxPages = 3) {
   const res = await fetch("/api/ed/companies/discover", {
     method: "POST",
@@ -193,6 +280,33 @@ export async function discoverCompanies(query?: string, maxPages = 3) {
     query: string;
     demo_mode?: boolean;
     message?: string | null;
+  }>(res);
+}
+
+export async function discoverCompaniesAsync(query?: string, maxPages = 5) {
+  const res = await fetch("/api/ed/companies/discover/async", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ query, max_pages: maxPages }),
+  });
+  return handleResponse<{ task_id: string; status: string }>(res);
+}
+
+export async function fetchDiscoverJobStatus(taskId: string) {
+  const res = await fetch(`/api/ed/companies/discover/jobs/${taskId}`, {
+    headers: authHeaders(),
+  });
+  return handleResponse<{
+    task_id: string;
+    status: string;
+    result?: {
+      added: number;
+      total: number;
+      query: string;
+      demo_mode?: boolean;
+      message?: string | null;
+    };
+    error?: string;
   }>(res);
 }
 
@@ -283,6 +397,8 @@ export async function fetchOutreachDashboard() {
     smtp_enabled: boolean;
     letters_approved: number;
     letters_sent: number;
+    letters_delivered: number;
+    letters_opened: number;
     letters_pending: number;
     inbound_count: number;
     followups_due: number;
@@ -302,6 +418,8 @@ export async function fetchOutreachDashboard() {
       body?: string | null;
       classification?: string | null;
       auto_handled: boolean;
+      classification_confidence?: number;
+      classification_method?: string;
     }>;
     followups: Array<{
       touch_id: number;
@@ -337,8 +455,10 @@ export async function recordInboundResponse(
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ subject, body, auto_respond: true }),
   });
-  return handleResponse<{
+    return handleResponse<{
     classification?: string;
+    classification_confidence?: number;
+    classification_method?: string;
     auto_reply?: string | null;
     needs_human?: boolean;
   }>(res);
@@ -394,8 +514,11 @@ export async function fetchProjectsDashboard() {
   }>(res);
 }
 
-export async function fetchProjectCatalog() {
-  const res = await fetch("/api/ed/projects/catalog", { headers: authHeaders() });
+export async function fetchProjectCatalog(competencies?: string) {
+  const qs = competencies?.trim()
+    ? `?competencies=${encodeURIComponent(competencies.trim())}`
+    : "";
+  const res = await fetch(`/api/ed/projects/catalog${qs}`, { headers: authHeaders() });
   return handleResponse<{
     items: Array<{
       id: number;
@@ -406,6 +529,108 @@ export async function fetchProjectCatalog() {
       duration_weeks?: number | null;
       competencies?: string | null;
       published_at?: string | null;
+      enrollment_count?: number;
+      seats_left?: number;
+    }>;
+  }>(res);
+}
+
+export type CatalogProjectRole = {
+  id: number;
+  title: string;
+  skills?: string | null;
+  hours_per_week?: number | null;
+  slots: number;
+  enrolled_count: number;
+  seats_left: number;
+};
+
+export type CatalogProjectDetail = {
+  id: number;
+  title: string;
+  company_name?: string | null;
+  description?: string | null;
+  spec_markdown?: string | null;
+  team_size?: number | null;
+  duration_weeks?: number | null;
+  competencies?: string | null;
+  published_at?: string | null;
+  enrollment_count?: number;
+  seats_left?: number;
+  roles?: CatalogProjectRole[];
+  my_enrollment?: {
+    id: number;
+    role_id?: number | null;
+    role_title?: string | null;
+    status: string;
+  } | null;
+};
+
+export async function fetchCatalogProject(projectId: number) {
+  const res = await fetch(`/api/ed/projects/catalog/${projectId}`, {
+    headers: authHeaders(),
+  });
+  return handleResponse<CatalogProjectDetail>(res);
+}
+
+export async function enrollInProject(projectId: number, roleId?: number) {
+  const res = await fetch(`/api/ed/projects/catalog/${projectId}/enroll`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ role_id: roleId ?? null }),
+  });
+  return handleResponse<{ id: number; project_id: number; role_title?: string | null; status: string }>(
+    res,
+  );
+}
+
+export async function withdrawFromProject(projectId: number) {
+  const res = await fetch(`/api/ed/projects/catalog/${projectId}/enroll`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  return handleResponse<{ status: string; project_id: number }>(res);
+}
+
+export async function fetchMyEnrollments() {
+  const res = await fetch("/api/ed/projects/my-enrollments", { headers: authHeaders() });
+  return handleResponse<{
+    items: Array<{
+      id: number;
+      project_id: number;
+      project_title: string;
+      role_title?: string | null;
+      status: string;
+    }>;
+  }>(res);
+}
+
+export async function syncProjectRoles(projectId: number) {
+  const res = await fetch(`/api/ed/projects/${projectId}/roles/sync`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return handleResponse<{ roles: CatalogProjectRole[] }>(res);
+}
+
+export async function fetchCompetencyChart() {
+  const res = await fetch("/api/ed/competencies/matrix/chart", { headers: authHeaders() });
+  return handleResponse<{
+    summary: { total: number; gaps: number; aligned: number; excess: number };
+    by_gap_type: Array<{ gap_type: string; count: number }>;
+    top_gaps: Array<{
+      name: string;
+      program_level: number;
+      industry_demand_pct: number;
+      industry_level_est: number;
+      gap_type: string;
+    }>;
+    comparison: Array<{
+      name: string;
+      program_level: number;
+      industry_level_est: number;
+      industry_demand_pct: number;
+      gap_type: string;
     }>;
   }>(res);
 }
@@ -502,4 +727,76 @@ export async function resolveEscalation(id: number, comment?: string) {
     body: JSON.stringify({ status: "resolved", comment }),
   });
   return handleResponse(res);
+}
+
+export async function deleteAccount(password: string) {
+  const res = await fetch("/api/auth/account", {
+    method: "DELETE",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ password }),
+  });
+  return handleResponse<{ status: string }>(res, { redirectOn401: false });
+}
+
+export async function fetchScoringWeights() {
+  const res = await fetch("/api/ed/companies/scoring/weights", { headers: authHeaders() });
+  return handleResponse<{ weights: Record<string, number> }>(res);
+}
+
+export async function updateScoringWeights(weights: Record<string, number>) {
+  const res = await fetch("/api/ed/companies/scoring/weights", {
+    method: "PATCH",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(weights),
+  });
+  return handleResponse<{ weights: Record<string, number>; rescored: number }>(res);
+}
+
+export async function fetchStudentProfile() {
+  const res = await fetch("/api/ed/projects/profile", { headers: authHeaders() });
+  return handleResponse<{ profile: { student_email: string; skills: string; notes?: string | null } | null }>(
+    res,
+  );
+}
+
+export async function saveStudentProfile(skills: string, notes?: string) {
+  const res = await fetch("/api/ed/projects/profile", {
+    method: "PUT",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ skills, notes: notes ?? null }),
+  });
+  return handleResponse<{ profile: { student_email: string; skills: string; notes?: string | null } }>(res);
+}
+
+export async function fetchProjectRecommendations(limit = 10) {
+  const res = await fetch(`/api/ed/projects/recommendations?limit=${limit}`, {
+    headers: authHeaders(),
+  });
+  return handleResponse<{
+    items: Array<{
+      id: number;
+      title: string;
+      company_name?: string | null;
+      match_score?: number;
+      skill_overlap?: number;
+      matched_skills?: string[];
+      seats_left?: number;
+      competencies?: string | null;
+    }>;
+  }>(res);
+}
+
+export type CommVersion = {
+  id: number;
+  version: number;
+  subject?: string | null;
+  body?: string | null;
+  value_proposition?: string | null;
+  edited_by?: string | null;
+  created_at?: string | null;
+};
+
+export async function fetchCommunicationVersions(commId: number) {
+  const res = await fetch(`/api/ed/comms/${commId}/versions`, { headers: authHeaders() });
+  return handleResponse<{ versions: CommVersion[] }>(res);
 }

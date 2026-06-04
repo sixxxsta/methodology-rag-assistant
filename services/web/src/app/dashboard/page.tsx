@@ -1,11 +1,12 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
 import { approveIndustry, fetchDashboard, resolveEscalation } from "@/lib/api";
-import { getUser, isAdmin } from "@/lib/auth";
+import { canUseEdAgent, getUser } from "@/lib/auth";
 import type { DashboardData } from "@/lib/types";
 import clsx from "clsx";
 import {
@@ -86,6 +87,7 @@ export default function DashboardPage() {
 
   return (
     <AuthGuard>
+      <CuratorGuard>
       <div className="flex min-h-screen flex-col md:flex-row">
         <Sidebar className="md:sticky md:top-0 md:h-screen" />
         <main className="flex-1 p-6 md:p-10">
@@ -228,7 +230,7 @@ export default function DashboardPage() {
                         >
                           <p className="font-medium">{esc.title}</p>
                           <p className="mt-1 text-sm text-muted">{esc.description}</p>
-                          {esc.level === 1 && isAdmin(getUser()) && (
+                          {esc.level === 1 && canUseEdAgent(getUser()) && (
                             <div className="mt-4 flex flex-wrap gap-2">
                               <input
                                 type="text"
@@ -255,7 +257,7 @@ export default function DashboardPage() {
                               </button>
                             </div>
                           )}
-                          {esc.level !== 1 && isAdmin(getUser()) && (
+                          {esc.level !== 1 && canUseEdAgent(getUser()) && (
                             <button
                               type="button"
                               disabled={busy}
@@ -297,6 +299,7 @@ export default function DashboardPage() {
           )}
         </main>
       </div>
+    </CuratorGuard>
     </AuthGuard>
   );
 }

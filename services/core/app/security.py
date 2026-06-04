@@ -1,6 +1,19 @@
-from fastapi import Header, HTTPException
+from __future__ import annotations
+
+from typing import Annotated
+
+from fastapi import Depends, Header, HTTPException
 
 from .config import get_settings
+
+
+def normalize_role(role: str) -> str:
+    r = (role or "").strip().lower()
+    if r in ("admin", "curator", "student"):
+        return r
+    if r == "user":
+        return "curator"
+    return "student"
 
 
 def require_internal(
@@ -18,8 +31,41 @@ def require_internal(
     if not email:
         raise HTTPException(status_code=401, detail="user context required")
 
+    role = normalize_role(x_user_role or "student")
     return {
         "email": email,
         "user_id": (x_user_id or "").strip(),
-        "role": (x_user_role or "user").strip(),
+        "role": role,
     }
+
+
+def _require_edagent(user: dict[str, str]) -> dict[str, str]:
+    if user["role"] == "student":
+        raise HTTPException(status_code=403, detail="access denied")
+    return user
+
+
+def _require_curator(user: dict[str, str]) -> dict[str, str]:
+    if user["role"] not in ("admin", "curator"):
+        raise HTTPException(status_code=403, detail="curator required")
+    return user
+
+
+def require_edagent(
+    user: Annotated[dict[str, str], Depends(require_internal)],
+) -> dict[str, str]:
+    return _require_edagent(user)
+
+
+def require_curator(
+    user: Annotated[dict[str, str], Depends(require_internal)],
+) -> dict[str, str]:
+    return _require_curator(user)
+
+
+def require_student(
+    user: Annotated[dict[str, str], Depends(require_internal)],
+) -> dict[str, str]:
+    if user["role"] != "student":
+        raise HTTPException(status_code=403, detail="student required")
+    return user

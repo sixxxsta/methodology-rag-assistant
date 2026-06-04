@@ -1,8 +1,9 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
 import {
   fetchOutreachDashboard,
@@ -11,7 +12,7 @@ import {
   sendFollowup,
   sendOutreachLetter,
 } from "@/lib/api";
-import { getUser, isAdmin } from "@/lib/auth";
+import { canUseEdAgent, getUser } from "@/lib/auth";
 import clsx from "clsx";
 import { AlertTriangle, ArrowLeft, Send } from "lucide-react";
 
@@ -20,12 +21,13 @@ type Dash = Awaited<ReturnType<typeof fetchOutreachDashboard>>;
 export default function OutreachPage() {
   const [data, setData] = useState<Dash | null>(null);
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [inboundCompany, setInboundCompany] = useState<number | "">("");
   const [inboundText, setInboundText] = useState("");
   const [agreementSummary, setAgreementSummary] = useState("");
-  const admin = isAdmin(getUser());
+  const canEdit = canUseEdAgent(getUser());
 
   const load = useCallback(async () => {
     setError("");
@@ -63,6 +65,7 @@ export default function OutreachPage() {
 
   return (
     <AuthGuard>
+      <CuratorGuard>
       <div className="flex min-h-screen flex-col md:flex-row">
         <Sidebar className="md:sticky md:top-0 md:h-screen" />
         <main className="flex-1 p-6 md:p-10">
@@ -76,17 +79,24 @@ export default function OutreachPage() {
 
           {loading && <p className="text-muted">Загрузка…</p>}
           {error && <p className="mb-4 text-sm text-red-400">{error}</p>}
+          {info && (
+            <p className="mb-4 rounded-lg border border-accent/30 bg-accent/10 px-4 py-2 text-sm text-accent">
+              {info}
+            </p>
+          )}
 
           {data && (
             <>
               <div className="mb-6 grid gap-3 sm:grid-cols-2 lg:grid-cols-4 text-sm">
                 <Stat label="Утверждено" value={data.letters_approved} />
                 <Stat label="Отправлено" value={data.letters_sent} />
+                <Stat label="Доставлено" value={data.letters_delivered} />
+                <Stat label="Открыто" value={data.letters_opened} />
                 <Stat label="В очереди" value={data.letters_pending} />
                 <Stat label="Ответов" value={data.inbound_count} />
               </div>
 
-              {!data.smtp_enabled && admin && (
+              {!data.smtp_enabled && canEdit && (
                 <p className="mb-4 rounded-lg border border-amber-500/30 bg-amber-500/10 px-4 py-2 text-sm text-amber-300">
                   SMTP не настроен — используйте «Отметить отправленным» (ручная отправка).
                 </p>
@@ -105,7 +115,7 @@ export default function OutreachPage() {
                         {q.contact_email && (
                           <p className="mt-1 text-xs text-accent">{q.contact_email}</p>
                         )}
-                        {admin && (
+                        {canEdit && (
                           <div className="mt-3 flex flex-wrap gap-2">
                             <button
                               type="button"
@@ -145,7 +155,7 @@ export default function OutreachPage() {
                         <span>
                           {f.company_name} — {f.title}
                         </span>
-                        {admin && (
+                        {canEdit && (
                           <button
                             type="button"
                             disabled={busy}
@@ -212,7 +222,11 @@ export default function OutreachPage() {
                         );
                         if (r.needs_human) {
                           setError(
-                            `Эскалация: ответ классифицирован как «${r.classification}». Требуется личный контакт.`,
+                            `Эскалация: «${r.classification}» (${Math.round((r.classification_confidence ?? 0) * 100)}%, ${r.classification_method ?? "—"}). Нужен личный контакт.`,
+                          );
+                        } else if (r.classification) {
+                          setInfo(
+                            `Классификация: ${r.classification} (${Math.round((r.classification_confidence ?? 0) * 100)}%, ${r.classification_method ?? "—"})`,
                           );
                         }
                         setInboundText("");
@@ -249,7 +263,12 @@ export default function OutreachPage() {
                           <AlertTriangle className="h-4 w-4 text-amber-400" />
                         )}
                         <strong>{r.company_name}</strong>
-                        <span className="text-xs text-muted">{r.classification}</span>
+                        <span className="text-xs text-muted">
+                          {r.classification}
+                          {r.classification_confidence != null &&
+                            ` · ${Math.round(r.classification_confidence * 100)}%`}
+                          {r.classification_method && ` (${r.classification_method})`}
+                        </span>
                         {r.auto_handled && (
                           <span className="text-xs text-emerald-400">авто</span>
                         )}
@@ -260,7 +279,7 @@ export default function OutreachPage() {
                 </ul>
               </section>
 
-              {admin && (
+              {canEdit && (
                 <section className="rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4">
                   <h2 className="mb-2 font-semibold">Соглашение с партнёром</h2>
                   <textarea
@@ -309,6 +328,7 @@ export default function OutreachPage() {
           )}
         </main>
       </div>
+    </CuratorGuard>
     </AuthGuard>
   );
 }

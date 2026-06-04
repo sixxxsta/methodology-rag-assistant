@@ -34,6 +34,7 @@ from .generator import (
     value_prop_prompt,
     value_prop_template,
 )
+from .history import list_versions, snapshot_version
 
 logger = logging.getLogger(__name__)
 
@@ -126,10 +127,20 @@ def generate_letter(
         .one()
     )
     settings = get_settings()
+    memory_hints = ""
+    if settings.strategy_memory_enabled:
+        from ..memory.strategy import get_strategy_hints
+
+        memory_hints = get_strategy_hints(db, category="letter", tone=tone)
+
+    base_prompt = letter_prompt(company, tone, ws.industry)
+    if memory_hints:
+        base_prompt = f"{memory_hints}\n\n---\n\n{base_prompt}"
+
     if settings.comms_use_llm:
         try:
             raw = generate_text(
-                letter_prompt(company, tone, ws.industry),
+                base_prompt,
                 timeout_seconds=settings.comms_llm_timeout_seconds,
             )
             subject, body = parse_subject_body(raw)
@@ -248,11 +259,13 @@ def update_communication(
     db: Session,
     comm_id: int,
     *,
+    actor_email: str | None = None,
     subject: str | None = None,
     body: str | None = None,
     value_proposition: str | None = None,
 ) -> dict:
     comm = db.query(Communication).filter(Communication.id == comm_id).one()
+    snapshot_version(db, comm, edited_by=actor_email)
     if subject is not None:
         comm.subject = subject
     if body is not None:
@@ -268,6 +281,11 @@ def update_communication(
         co = db.query(Company).filter(Company.id == comm.company_id).first()
         name = co.name if co else None
     return _comm_dict(comm, name)
+
+
+def get_communication_versions(db: Session, comm_id: int) -> list[dict]:
+    db.query(Communication).filter(Communication.id == comm_id).one()
+    return list_versions(db, comm_id)
 
 
 def approve_communication(db: Session, comm_id: int, *, actor_email: str) -> dict:

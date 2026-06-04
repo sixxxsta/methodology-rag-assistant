@@ -13,23 +13,44 @@ class ScoreResult:
     breakdown: dict[str, int]
 
 
-def _size_score(company: Company) -> int:
+def _weights() -> dict[str, int]:
+    from .scoring_config import get_runtime_weights
+
+    return get_runtime_weights()
+
+
+def get_scoring_weights_public() -> dict[str, int]:
+    return dict(_weights())
+
+
+def update_scoring_weights(weights: dict[str, int]) -> dict[str, int]:
+    from .scoring_config import set_runtime_weights
+
+    return set_runtime_weights(weights)
+
+
+def _size_score(company: Company, cap: int) -> int:
+    raw = 0
     if company.size_category == "large":
-        return 20
-    if company.size_category == "medium":
-        return 16
-    if company.size_category == "small":
-        return 10
-    if company.employee_count:
+        raw = 20
+    elif company.size_category == "medium":
+        raw = 16
+    elif company.size_category == "small":
+        raw = 10
+    elif company.employee_count:
         if company.employee_count >= 1000:
-            return 18
-        if company.employee_count >= 100:
-            return 14
-        return 8
-    return 5
+            raw = 18
+        elif company.employee_count >= 100:
+            raw = 14
+        else:
+            raw = 8
+    else:
+        raw = 5
+    return min(cap, int(raw * cap / 20)) if cap < 20 else raw
 
 
 def score_company(company: Company, industry_skills: set[str]) -> ScoreResult:
+    w = _weights()
     text = " ".join(
         filter(
             None,
@@ -37,16 +58,20 @@ def score_company(company: Company, industry_skills: set[str]) -> ScoreResult:
         )
     )
     company_skills = set(extract_skills(text))
+    cap_c = w["competency"]
     if industry_skills:
         overlap = len(company_skills & industry_skills)
-        competency_pts = min(40, int(overlap / max(len(industry_skills), 1) * 40) + overlap * 2)
+        competency_pts = min(
+            cap_c,
+            int(overlap / max(len(industry_skills), 1) * cap_c) + overlap * 2,
+        )
     else:
-        competency_pts = min(40, len(company_skills) * 4)
+        competency_pts = min(cap_c, len(company_skills) * 4)
 
-    size_pts = _size_score(company)
-    education_pts = 20 if company.has_education_program else 0
-    website_pts = 10 if company.website else 0
-    region_pts = 10 if company.region else 5
+    size_pts = _size_score(company, w["size"])
+    education_pts = w["education"] if company.has_education_program else 0
+    website_pts = w["website"] if company.website else max(0, w["website"] // 2)
+    region_pts = w["region"] if company.region else max(0, w["region"] // 2)
 
     total = min(100, competency_pts + size_pts + education_pts + website_pts + region_pts)
     breakdown = {

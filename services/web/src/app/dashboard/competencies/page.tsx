@@ -3,14 +3,18 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { CompetencyMatrixChart } from "@/components/competency-matrix-chart";
+import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
 import {
   collectVacancies,
+  exportCompetencyMatrixCsv,
+  fetchCompetencyChart,
   fetchCompetencyMatrix,
   fetchCompetencyStats,
   seedProgramCompetencies,
 } from "@/lib/api";
-import { getUser, isAdmin } from "@/lib/auth";
+import { canUseEdAgent, getUser } from "@/lib/auth";
 import type { CompetencyMatrix, MatrixItem } from "@/lib/types";
 import clsx from "clsx";
 import { ArrowLeft, Download, Loader2, Search } from "lucide-react";
@@ -32,19 +36,28 @@ function gapColor(type: string) {
 
 export default function CompetenciesPage() {
   const [matrix, setMatrix] = useState<CompetencyMatrix | null>(null);
+  const [chart, setChart] = useState<Awaited<ReturnType<typeof fetchCompetencyChart>> | null>(
+    null,
+  );
   const [stats, setStats] = useState({ program: 0, industry: 0, vacancies: 0 });
   const [query, setQuery] = useState("Python разработчик");
+  const [provider, setProvider] = useState<"hh" | "superjob">("hh");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [collecting, setCollecting] = useState(false);
   const [info, setInfo] = useState("");
-  const admin = isAdmin(getUser());
+  const canEdit = canUseEdAgent(getUser());
 
   const load = useCallback(async () => {
     setError("");
     try {
-      const [m, s] = await Promise.all([fetchCompetencyMatrix(), fetchCompetencyStats()]);
+      const [m, s, c] = await Promise.all([
+        fetchCompetencyMatrix(),
+        fetchCompetencyStats(),
+        fetchCompetencyChart(),
+      ]);
       setMatrix(m);
+      setChart(c);
       setStats({
         program: s.program_competencies,
         industry: s.industry_competencies,
@@ -66,7 +79,7 @@ export default function CompetenciesPage() {
     setCollecting(true);
     setError("");
     try {
-      const r = await collectVacancies(query.trim(), 2);
+      const r = await collectVacancies(query.trim(), 2, provider);
       if (r.demo_mode && r.message) setInfo(r.message);
       else setInfo("");
       await load();
@@ -81,6 +94,7 @@ export default function CompetenciesPage() {
 
   return (
     <AuthGuard>
+      <CuratorGuard>
       <div className="flex min-h-screen flex-col md:flex-row">
         <Sidebar className="md:sticky md:top-0 md:h-screen" />
         <main className="flex-1 p-6 md:p-10">
@@ -101,16 +115,24 @@ export default function CompetenciesPage() {
             <StatCard label="Вакансий в базе" value={stats.vacancies} />
           </div>
 
-          {admin && (
+          {canEdit && (
             <section className="mb-8 rounded-2xl border border-border bg-surface-2 p-5">
               <h2 className="mb-3 flex items-center gap-2 font-semibold">
                 <Search className="h-5 w-5 text-accent" />
-                Сбор вакансий HeadHunter
+                Сбор вакансий (HH / Superjob)
               </h2>
               <p className="mb-4 text-sm text-muted">
-                Поиск по API hh.ru, извлечение навыков из описаний (FR-1.1, FR-1.2).
+                Поиск по API, извлечение навыков из описаний (FR-1.1, FR-1.2).
               </p>
               <div className="flex flex-wrap gap-2">
+                <select
+                  value={provider}
+                  onChange={(e) => setProvider(e.target.value as "hh" | "superjob")}
+                  className="rounded-xl border border-border bg-surface px-3 py-2.5 text-sm"
+                >
+                  <option value="hh">HeadHunter</option>
+                  <option value="superjob">Superjob</option>
+                </select>
                 <input
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
@@ -148,6 +170,26 @@ export default function CompetenciesPage() {
                 >
                   Загрузить программу
                 </button>
+                <button
+                  type="button"
+                  disabled={collecting || !matrix?.items.length}
+                  onClick={async () => {
+                    try {
+                      const blob = await exportCompetencyMatrixCsv();
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement("a");
+                      a.href = url;
+                      a.download = "competency_matrix.csv";
+                      a.click();
+                      URL.revokeObjectURL(url);
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "Ошибка экспорта");
+                    }
+                  }}
+                  className="rounded-xl border border-border px-4 py-2.5 text-sm hover:bg-surface"
+                >
+                  CSV
+                </button>
               </div>
             </section>
           )}
@@ -162,6 +204,10 @@ export default function CompetenciesPage() {
             <p className="mb-4 rounded-lg bg-red-500/10 px-4 py-2 text-sm text-red-400">{error}</p>
           )}
           {loading && <p className="text-muted">Загрузка матрицы…</p>}
+
+          {chart && matrix && matrix.items.length > 0 && (
+            <CompetencyMatrixChart data={chart} />
+          )}
 
           {matrix && (
             <>
@@ -185,6 +231,7 @@ export default function CompetenciesPage() {
           )}
         </main>
       </div>
+    </CuratorGuard>
     </AuthGuard>
   );
 }

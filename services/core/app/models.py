@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -204,6 +204,7 @@ class Communication(Base):
     value_proposition: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="draft")
     delivery_status: Mapped[str] = mapped_column(String(32), default="pending")
+    tracking_token: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
     approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -211,6 +212,47 @@ class Communication(Base):
     opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CommunicationVersion(Base):
+    __tablename__ = "communication_versions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    communication_id: Mapped[int] = mapped_column(ForeignKey("communications.id"), index=True)
+    version: Mapped[int] = mapped_column(Integer)
+    subject: Mapped[str] = mapped_column(String(512))
+    body: Mapped[str] = mapped_column(Text)
+    value_proposition: Mapped[str | None] = mapped_column(Text, nullable=True)
+    edited_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EmailOutbox(Base):
+    __tablename__ = "email_outbox"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    communication_id: Mapped[int] = mapped_column(ForeignKey("communications.id"), index=True)
+    to_email: Mapped[str] = mapped_column(String(255))
+    subject: Mapped[str] = mapped_column(String(512))
+    body: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class StudentProfile(Base):
+    __tablename__ = "student_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    student_email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    skills: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -245,6 +287,49 @@ class PartnerAgreement(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class CommunicationOutcome(Base):
+    __tablename__ = "communication_outcomes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    company_id: Mapped[int] = mapped_column(ForeignKey("companies.id"), index=True)
+    communication_id: Mapped[int | None] = mapped_column(
+        ForeignKey("communications.id"), nullable=True
+    )
+    interaction_id: Mapped[int | None] = mapped_column(
+        ForeignKey("interactions.id"), nullable=True
+    )
+    outcome: Mapped[str] = mapped_column(String(32))
+    features_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recorded_by: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class StrategyPattern(Base):
+    __tablename__ = "strategy_patterns"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(ForeignKey("workspaces.id"), index=True)
+    category: Mapped[str] = mapped_column(String(32), index=True)
+    tone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    outcome: Mapped[str] = mapped_column(String(32))
+    pattern_text: Mapped[str] = mapped_column(Text)
+    source_outcome_id: Mapped[int | None] = mapped_column(
+        ForeignKey("communication_outcomes.id"), nullable=True
+    )
+    source_communication_id: Mapped[int | None] = mapped_column(
+        ForeignKey("communications.id"), nullable=True
+    )
+    success_count: Mapped[int] = mapped_column(Integer, default=0)
+    fail_count: Mapped[int] = mapped_column(Integer, default=0)
+    score: Mapped[float] = mapped_column(Float, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class Project(Base):
     __tablename__ = "projects"
 
@@ -269,3 +354,42 @@ class Project(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+    roles: Mapped[list[ProjectRole]] = relationship(back_populates="project", cascade="all, delete-orphan")
+    enrollments: Mapped[list[ProjectEnrollment]] = relationship(
+        back_populates="project", cascade="all, delete-orphan"
+    )
+
+
+class ProjectRole(Base):
+    __tablename__ = "project_roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    title: Mapped[str] = mapped_column(String(255))
+    skills: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hours_per_week: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    slots: Mapped[int] = mapped_column(Integer, default=1)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project: Mapped[Project] = relationship(back_populates="roles")
+    enrollments: Mapped[list[ProjectEnrollment]] = relationship(back_populates="role")
+
+
+class ProjectEnrollment(Base):
+    __tablename__ = "project_enrollments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id"), index=True)
+    role_id: Mapped[int | None] = mapped_column(ForeignKey("project_roles.id"), nullable=True, index=True)
+    student_email: Mapped[str] = mapped_column(String(255), index=True)
+    student_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    project: Mapped[Project] = relationship(back_populates="enrollments")
+    role: Mapped[ProjectRole | None] = relationship(back_populates="enrollments")

@@ -21,7 +21,8 @@ from ..services import (
     update_phase,
 )
 from .hh_employers import employer_to_company_fields, search_employers
-from .scoring import apply_score, industry_skill_set, score_company
+from ..config import get_settings
+from .scoring import ScoreResult, industry_skill_set, score_company
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +218,75 @@ def _seed_escalation_2(db: Session, workspace_id: int) -> None:
         description="Просмотрите Top-20, отметьте подходящих партнёров и утвердите список.",
     )
     db.commit()
+
+
+def enrich_company(db: Session, company_id: int, *, actor_email: str) -> dict:
+    from .enrichment import fetch_website_profile
+
+    ws = ensure_workspace(db)
+    company = (
+        db.query(Company)
+        .filter(Company.workspace_id == ws.id, Company.id == company_id)
+        .one()
+    )
+    if not company.website:
+        raise ValueError("у компании не указан website")
+
+    profile = fetch_website_profile(company.website)
+    if profile.get("title") and not company.description:
+        company.description = profile["description"]
+    elif profile.get("description"):
+        extra = profile["description"][:500]
+        if extra and (not company.description or extra not in company.description):
+            company.description = "\n".join(filter(None, [company.description, extra]))[:4000]
+
+    if profile.get("tech_stack"):
+        company.tech_stack = profile["tech_stack"]
+
+    skills = industry_skill_set(
+        db.query(Competency).filter(Competency.workspace_id == ws.id).all()
+    )
+    apply_score(company, score_company(company, skills))
+
+    log_action(
+        db,
+        workspace_id=ws.id,
+        actor_email=actor_email,
+        action="companies.enrich",
+        entity_id=str(company_id),
+        details=profile.get("url"),
+    )
+    db.commit()
+    db.refresh(company)
+    return {
+        **_company_dict(company),
+        "enrichment": profile,
+    }
+
+
+def enrich_batch(db: Session, *, actor_email: str, limit: int = 10) -> dict:
+    ws = ensure_workspace(db)
+    rows = (
+        db.query(Company)
+        .filter(
+            Company.workspace_id == ws.id,
+            Company.website.isnot(None),
+            Company.website != "",
+            Company.status != "rejected",
+        )
+        .order_by(Company.score.desc().nullslast())
+        .limit(max(1, min(limit, 30)))
+        .all()
+    )
+    enriched = 0
+    errors: list[str] = []
+    for company in rows:
+        try:
+            enrich_company(db, company.id, actor_email=actor_email)
+            enriched += 1
+        except Exception as exc:
+            errors.append(f"{company.id}: {exc}")
+    return {"attempted": len(rows), "enriched": enriched, "errors": errors}
 
 
 def update_company(db: Session, company_id: int, **fields) -> dict:

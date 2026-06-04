@@ -3,7 +3,8 @@
 import type { ReactNode } from "react";
 import Link from "next/link";
 import { LayoutDashboard, LogOut, MessageSquare, Settings, Sparkles } from "lucide-react";
-import { clearSession, getUser, isAdmin } from "@/lib/auth";
+import { clearSession, getUser, isAdmin, canUseEdAgent, isStudent, roleLabel } from "@/lib/auth";
+import { deleteAccount } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import clsx from "clsx";
 
@@ -26,6 +27,21 @@ function EdLink({ href, children }: { href: string; children: ReactNode }) {
 export function Sidebar({ onNewChat, className }: Props) {
   const router = useRouter();
   const user = getUser();
+  const edAgent = canUseEdAgent(user);
+  const student = isStudent(user);
+
+  async function onDeleteAccount() {
+    const pwd = window.prompt("Введите пароль для подтверждения удаления аккаунта:");
+    if (!pwd) return;
+    if (!window.confirm("Удалить аккаунт и данные в каталоге? Это необратимо.")) return;
+    try {
+      await deleteAccount(pwd);
+      clearSession();
+      router.push("/login");
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Не удалось удалить аккаунт");
+    }
+  }
 
   function logout() {
     clearSession();
@@ -54,11 +70,9 @@ export function Sidebar({ onNewChat, className }: Props) {
       {user && (
         <div className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-muted">
           <span className="text-text">{user.email}</span>
-          {isAdmin(user) && (
-            <span className="ml-2 rounded-md bg-accent/20 px-1.5 py-0.5 text-xs text-accent">
-              admin
-            </span>
-          )}
+          <span className="ml-2 rounded-md bg-accent/20 px-1.5 py-0.5 text-xs text-accent">
+            {roleLabel(user.role)}
+          </span>
         </div>
       )}
 
@@ -87,24 +101,33 @@ export function Sidebar({ onNewChat, className }: Props) {
       </p>
 
       <div className="mt-auto flex flex-col gap-2">
-        <p className="px-1 text-xs font-medium uppercase tracking-wide text-muted">
-          EdAgent
-        </p>
+        {edAgent && (
+          <>
+            <p className="px-1 text-xs font-medium uppercase tracking-wide text-muted">
+              EdAgent
+            </p>
+            <Link
+              href="/dashboard"
+              className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm transition hover:border-accent hover:bg-surface-2"
+            >
+              <LayoutDashboard className="h-4 w-4 shrink-0" />
+              Обзор фаз
+            </Link>
+            <nav className="flex flex-col gap-0.5 pl-1 text-sm">
+              <EdLink href="/dashboard/competencies">1. Компетенции</EdLink>
+              <EdLink href="/dashboard/companies">2. Компании</EdLink>
+              <EdLink href="/dashboard/communications">3. Коммуникации</EdLink>
+              <EdLink href="/dashboard/outreach">4. Outreach</EdLink>
+              <EdLink href="/dashboard/projects">5. Проекты</EdLink>
+            </nav>
+          </>
+        )}
         <Link
-          href="/dashboard"
+          href="/catalog"
           className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm transition hover:border-accent hover:bg-surface-2"
         >
-          <LayoutDashboard className="h-4 w-4 shrink-0" />
-          Обзор фаз
+          Каталог проектов
         </Link>
-        <nav className="flex flex-col gap-0.5 pl-1 text-sm">
-          <EdLink href="/dashboard/competencies">1. Компетенции</EdLink>
-          <EdLink href="/dashboard/companies">2. Компании</EdLink>
-          <EdLink href="/dashboard/communications">3. Коммуникации</EdLink>
-          <EdLink href="/dashboard/outreach">4. Outreach</EdLink>
-          <EdLink href="/dashboard/projects">5. Проекты</EdLink>
-          <EdLink href="/catalog">Каталог</EdLink>
-        </nav>
         {onNewChat && (
           <button
             type="button"
@@ -123,6 +146,15 @@ export function Sidebar({ onNewChat, className }: Props) {
             <Settings className="h-4 w-4" />
             Админка
           </Link>
+        )}
+        {student && (
+          <button
+            type="button"
+            onClick={onDeleteAccount}
+            className="rounded-xl border border-red-500/30 px-4 py-2 text-xs text-red-400 transition hover:bg-red-500/10"
+          >
+            Удалить аккаунт (152-ФЗ)
+          </button>
         )}
         <button
           type="button"

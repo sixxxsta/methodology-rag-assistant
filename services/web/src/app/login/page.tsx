@@ -45,7 +45,11 @@ export default function LoginPage() {
             ◇
           </div>
           <h1 className="text-2xl font-bold">Методолог</h1>
-          <p className="mt-1 text-sm text-muted">Войдите для доступа к ассистенту</p>
+          <p className="mt-1 text-sm text-muted">
+            {tab === "login"
+              ? "Войдите по выданным учётным данным"
+              : "Регистрация доступна только ученикам"}
+          </p>
         </div>
 
         <div className="mb-6 flex gap-2 rounded-xl bg-surface-2 p-1">

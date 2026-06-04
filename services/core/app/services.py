@@ -227,6 +227,12 @@ def create_escalation(
     )
     db.add(esc)
     db.flush()
+    try:
+        from .notifications import notify_escalation
+
+        notify_escalation(level=level, title=title, description=description)
+    except Exception:
+        pass
     return esc
 
 

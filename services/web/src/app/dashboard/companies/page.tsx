@@ -1,19 +1,25 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
 import {
+  fetchScoringWeights,
+  updateScoringWeights,
   approveShortlist,
   discoverCompanies,
+  discoverCompaniesAsync,
+  enrichCompaniesBatch,
+  fetchDiscoverJobStatus,
   fillShortlist,
   fetchCompaniesShortlist,
   fetchCompaniesTop,
   rejectCompany,
   verifyCompany,
 } from "@/lib/api";
-import { getUser, isAdmin } from "@/lib/auth";
+import { canUseEdAgent, getUser } from "@/lib/auth";
 import type { CompanyInfo } from "@/lib/types";
 import clsx from "clsx";
 import {
@@ -38,7 +44,8 @@ export default function CompaniesPage() {
   const [info, setInfo] = useState("");
   const [success, setSuccess] = useState("");
   const [shortlistItems, setShortlistItems] = useState<CompanyInfo[]>([]);
-  const admin = isAdmin(getUser());
+  const [weights, setWeights] = useState<Record<string, number> | null>(null);
+  const canEdit = canUseEdAgent(getUser());
 
   const load = useCallback(async () => {
     setError("");
@@ -52,12 +59,16 @@ export default function CompaniesPage() {
       setTop100(t100.companies);
       setShortlistItems(sl.companies);
       setTotal(t100.total_in_workspace);
+      if (canEdit) {
+        const w = await fetchScoringWeights().catch(() => null);
+        if (w) setWeights(w.weights);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка загрузки");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canEdit]);
 
   useEffect(() => {
     load();
@@ -67,6 +78,34 @@ export default function CompaniesPage() {
 
   const rows =
     tab === "top10" ? top10 : tab === "top100" ? top100 : shortlist;
+
+  async function onDiscoverAsync() {
+    setBusy(true);
+    setError("");
+    setInfo("Поиск компаний запущен в фоне…");
+    try {
+      const { task_id } = await discoverCompaniesAsync(query.trim() || undefined, 5);
+      for (let i = 0; i < 120; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const job = await fetchDiscoverJobStatus(task_id);
+        if (job.status === "SUCCESS" && job.result) {
+          if (job.result.demo_mode && job.result.message) setInfo(job.result.message);
+          else setInfo(`Готово: +${job.result.added} компаний, всего ${job.result.total}`);
+          await load();
+          return;
+        }
+        if (job.status === "FAILURE") {
+          throw new Error(job.error || "Фоновая задача завершилась с ошибкой");
+        }
+      }
+      setInfo("Задача ещё выполняется — обновите страницу позже.");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка фонового поиска");
+      setInfo("");
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function onDiscover() {
     setBusy(true);
@@ -125,6 +164,7 @@ export default function CompaniesPage() {
 
   return (
     <AuthGuard>
+      <CuratorGuard>
       <div className="flex min-h-screen flex-col md:flex-row">
         <Sidebar className="md:sticky md:top-0 md:h-screen" />
         <main className="flex-1 p-6 md:p-10">
@@ -145,7 +185,51 @@ export default function CompaniesPage() {
             </span>
           </div>
 
-          {admin && (
+          {canEdit && weights && (
+            <section className="mb-6 rounded-2xl border border-border bg-surface-2 p-4">
+              <h2 className="mb-2 text-sm font-semibold">Веса скоринга (сумма = 100)</h2>
+              <div className="flex flex-wrap gap-3">
+                {(["competency", "size", "education", "website", "region"] as const).map((key) => (
+                  <label key={key} className="text-xs text-muted">
+                    {key}
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={weights[key] ?? 0}
+                      onChange={(e) =>
+                        setWeights((w) => (w ? { ...w, [key]: Number(e.target.value) } : w))
+                      }
+                      className="mt-1 block w-16 rounded border border-border bg-surface px-2 py-1 text-sm text-text"
+                    />
+                  </label>
+                ))}
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={async () => {
+                    if (!weights) return;
+                    setBusy(true);
+                    try {
+                      const r = await updateScoringWeights(weights);
+                      setWeights(r.weights);
+                      setSuccess(`Веса обновлены, пересчитано: ${r.rescored}`);
+                      await load();
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "Ошибка весов");
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                  className="self-end rounded-lg border border-border px-3 py-1.5 text-sm hover:border-accent"
+                >
+                  Применить
+                </button>
+              </div>
+            </section>
+          )}
+
+          {canEdit && (
             <section className="mb-6 rounded-2xl border border-border bg-surface-2 p-5">
               <h2 className="mb-3 flex items-center gap-2 font-semibold">
                 <Search className="h-5 w-5 text-accent" />
@@ -166,6 +250,36 @@ export default function CompaniesPage() {
                 >
                   {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Building2 className="h-4 w-4" />}
                   Найти компании
+                </button>
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={onDiscoverAsync}
+                  className="rounded-xl border border-border px-4 py-2.5 text-sm hover:bg-surface disabled:opacity-50"
+                  title="До 5 страниц HH, не блокирует интерфейс"
+                >
+                  В фоне (5 стр.)
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || total < 1}
+                  onClick={async () => {
+                    setBusy(true);
+                    setError("");
+                    try {
+                      const r = await enrichCompaniesBatch(10);
+                      setInfo(`Обогащено: ${r.enriched} из ${r.attempted}`);
+                      await load();
+                    } catch (e) {
+                      setError(e instanceof Error ? e.message : "Ошибка обогащения");
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                  className="rounded-xl border border-border px-4 py-2.5 text-sm hover:bg-surface disabled:opacity-50"
+                  title="Парсинг website компаний"
+                >
+                  Обогатить профили
                 </button>
                 <button
                   type="button"
@@ -246,7 +360,7 @@ export default function CompaniesPage() {
             <p className="text-muted">Загрузка…</p>
           ) : rows.length === 0 ? (
             <p className="text-muted">
-              Пул пуст. {admin ? "Нажмите «Найти компании»." : "Ожидайте действий куратора."}
+              Пул пуст. {canEdit ? "Нажмите «Найти компании»." : "Ожидайте действий куратора."}
             </p>
           ) : (
             <div className="space-y-3">
@@ -316,7 +430,7 @@ export default function CompaniesPage() {
                     </p>
                   )}
 
-                  {admin && c.status !== "rejected" && (
+                  {canEdit && c.status !== "rejected" && (
                     <div className="mt-3 flex gap-2">
                       {!c.in_shortlist && (
                         <button
@@ -344,6 +458,7 @@ export default function CompaniesPage() {
           )}
         </main>
       </div>
+    </CuratorGuard>
     </AuthGuard>
   );
 }

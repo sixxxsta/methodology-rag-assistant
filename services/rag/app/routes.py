@@ -40,6 +40,21 @@ async def health() -> HealthResponse:
     )
 
 
+@router.get("/ready")
+async def ready() -> dict:
+    try:
+        pipeline = get_pipeline()
+        points = pipeline.store.count()
+        return {
+            "status": "ready",
+            "qdrant_collection": settings.qdrant_collection,
+            "knowledge_points": points,
+            "llm_provider_active": pipeline.llm_provider_active,
+        }
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest) -> ChatResponse:
     pipeline = get_pipeline()

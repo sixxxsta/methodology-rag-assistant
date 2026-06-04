@@ -20,9 +20,12 @@ type Config struct {
 	JWTSecret          string
 	JWTTTLHours        int
 	AdminEmail         string
+	AdminPassword      string
 	KnowledgeDir       string
 	CoreServiceURL     string
 	CoreInternalSecret string
+	RateLimitRegister  int
+	RateLimitChat      int
 }
 
 func Load() (Config, error) {
@@ -44,9 +47,12 @@ func Load() (Config, error) {
 		JWTSecret:         jwtSecret,
 		JWTTTLHours:       intFromEnv("JWT_TTL_HOURS", 72),
 		AdminEmail:        resolveAdminEmail(),
+		AdminPassword:     strings.TrimSpace(os.Getenv("ADMIN_PASSWORD")),
 		KnowledgeDir:       envOrDefault("KNOWLEDGE_DIR", "/knowledge"),
 		CoreServiceURL:     strings.TrimRight(envOrDefault("CORE_SERVICE_URL", "http://127.0.0.1:8200"), "/"),
 		CoreInternalSecret: strings.TrimSpace(os.Getenv("CORE_INTERNAL_SECRET")),
+		RateLimitRegister:  intFromEnv("RATE_LIMIT_REGISTER_PER_MIN", 10),
+		RateLimitChat:      intFromEnv("RATE_LIMIT_CHAT_PER_MIN", 30),
 	}, nil
 }
 

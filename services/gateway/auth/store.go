@@ -13,8 +13,11 @@ import (
 )
 
 const (
-	RoleUser  = "user"
-	RoleAdmin = "admin"
+	RoleStudent = "student"
+	RoleCurator = "curator"
+	RoleAdmin   = "admin"
+	// RoleUser is legacy — migrated to curator on login.
+	RoleUser = "user"
 )
 
 type User struct {
@@ -55,7 +58,7 @@ func (s *Store) migrate() error {
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			email TEXT NOT NULL UNIQUE COLLATE NOCASE,
 			password_hash TEXT NOT NULL,
-			role TEXT NOT NULL DEFAULT 'user',
+			role TEXT NOT NULL DEFAULT 'student',
 			created_at TEXT NOT NULL
 		);
 	`)
@@ -68,13 +71,27 @@ func (s *Store) CountUsers() (int, error) {
 	return n, err
 }
 
+func NormalizeRole(role string) string {
+	switch strings.ToLower(strings.TrimSpace(role)) {
+	case RoleAdmin:
+		return RoleAdmin
+	case RoleCurator, RoleUser:
+		return RoleCurator
+	case RoleStudent:
+		return RoleStudent
+	default:
+		return RoleStudent
+	}
+}
+
 func (s *Store) CreateUser(email, password, role string) (*User, error) {
 	email = normalizeEmail(email)
 	if email == "" || len(password) < 6 {
 		return nil, fmt.Errorf("email required and password min 6 chars")
 	}
-	if role != RoleUser && role != RoleAdmin {
-		role = RoleUser
+	role = NormalizeRole(role)
+	if role != RoleStudent && role != RoleCurator && role != RoleAdmin {
+		role = RoleStudent
 	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
@@ -113,13 +130,11 @@ func (s *Store) Authenticate(email, password string) (*User, error) {
 		return nil, fmt.Errorf("invalid email or password")
 	}
 	t, _ := time.Parse(time.RFC3339, createdAt)
-	return &User{ID: id, Email: email, Role: role, CreatedAt: t}, nil
+	return &User{ID: id, Email: email, Role: NormalizeRole(role), CreatedAt: t}, nil
 }
 
 func (s *Store) UpdateRole(id int64, role string) (*User, error) {
-	if role != RoleUser && role != RoleAdmin {
-		role = RoleUser
-	}
+	role = NormalizeRole(role)
 	_, err := s.db.Exec(`UPDATE users SET role = ? WHERE id = ?`, role, id)
 	if err != nil {
 		return nil, err
@@ -136,7 +151,29 @@ func (s *Store) GetByID(id int64) (*User, error) {
 		return nil, err
 	}
 	t, _ := time.Parse(time.RFC3339, createdAt)
-	return &User{ID: id, Email: email, Role: role, CreatedAt: t}, nil
+	return &User{ID: id, Email: email, Role: NormalizeRole(role), CreatedAt: t}, nil
+}
+
+func (s *Store) DeleteUser(id int64) error {
+	_, err := s.db.Exec(`DELETE FROM users WHERE id = ?`, id)
+	return err
+}
+
+func (s *Store) GetByEmail(email string) (*User, error) {
+	email = normalizeEmail(email)
+	var id int64
+	var role, createdAt string
+	err := s.db.QueryRow(
+		`SELECT id, role, created_at FROM users WHERE email = ?`, email,
+	).Scan(&id, &role, &createdAt)
+	if err == sql.ErrNoRows {
+		return nil, fmt.Errorf("user not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	t, _ := time.Parse(time.RFC3339, createdAt)
+	return &User{ID: id, Email: email, Role: NormalizeRole(role), CreatedAt: t}, nil
 }
 
 func normalizeEmail(e string) string {

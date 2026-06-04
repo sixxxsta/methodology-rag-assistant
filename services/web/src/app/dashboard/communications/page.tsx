@@ -1,19 +1,25 @@
-"use client";
+﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
 import {
   approveCommunication,
   completeCommsPhase,
+  downloadPresentationPdf,
+  exportQloraDataset,
+  fetchMemoryStats,
+  syncStrategyMemory,
+  fetchCommunicationVersions,
   fetchCommsShortlist,
   fetchFaq,
   generateFaq,
   generateLetter,
   generateLettersBatch,
 } from "@/lib/api";
-import { getUser, isAdmin } from "@/lib/auth";
+import { canUseEdAgent, getUser } from "@/lib/auth";
 import type { CommunicationInfo, ShortlistCommItem } from "@/lib/types";
 import clsx from "clsx";
 import { ArrowLeft, Loader2, Mail, Send } from "lucide-react";
@@ -25,15 +31,22 @@ export default function CommunicationsPage() {
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [success, setSuccess] = useState("");
+  const [memory, setMemory] = useState<Awaited<ReturnType<typeof fetchMemoryStats>> | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
-  const admin = isAdmin(getUser());
+  const [versions, setVersions] = useState<Record<number, Awaited<ReturnType<typeof fetchCommunicationVersions>>["versions"]>>({});
+  const canEdit = canUseEdAgent(getUser());
 
   const load = useCallback(async () => {
     setError("");
     try {
-      const [data, faqData] = await Promise.all([fetchCommsShortlist(), fetchFaq()]);
+      const [data, faqData, mem] = await Promise.all([
+        fetchCommsShortlist(),
+        fetchFaq(),
+        fetchMemoryStats().catch(() => null),
+      ]);
       setItems(data.items);
       if (faqData.faq) setFaq(faqData.faq);
+      setMemory(mem);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка");
     } finally {
@@ -90,6 +103,7 @@ export default function CommunicationsPage() {
 
   return (
     <AuthGuard>
+      <CuratorGuard>
       <div className="flex min-h-screen flex-col md:flex-row">
         <Sidebar className="md:sticky md:top-0 md:h-screen" />
         <main className="flex-1 p-6 md:p-10">
@@ -103,9 +117,58 @@ export default function CommunicationsPage() {
 
           <p className="mb-4 text-sm text-muted">
             Утверждено писем: <strong className="text-text">{approvedCount}</strong> / {items.length}
+            {memory && (
+              <>
+                {" "}
+                · Паттернов памяти: <strong>{memory.patterns_success}</strong> / {memory.outcomes_total}{" "}
+                исходов
+              </>
+            )}
           </p>
 
-          {admin && (
+          {canEdit && memory && (
+            <section className="mb-6 flex flex-wrap gap-2 rounded-xl border border-border bg-surface-2 p-4 text-sm">
+              <button
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const r = await syncStrategyMemory();
+                    setSuccess(`Память: обновлено ${r.patterns_upserted} паттернов.`);
+                    setMemory(await fetchMemoryStats());
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "Ошибка");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className="rounded-lg border border-border px-3 py-1.5 hover:bg-surface"
+              >
+                Синхр. память
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const r = await exportQloraDataset();
+                    setSuccess(`QLoRA датасет: ${r.records} записей → ${r.path}`);
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "Ошибка экспорта");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className="rounded-lg border border-border px-3 py-1.5 hover:bg-surface"
+              >
+                Экспорт QLoRA
+              </button>
+            </section>
+          )}
+
+          {canEdit && (
             <section className="mb-6 flex flex-wrap gap-2 rounded-2xl border border-border bg-surface-2 p-4">
               <button
                 type="button"
@@ -142,6 +205,30 @@ export default function CommunicationsPage() {
                 className="rounded-xl border border-border px-4 py-2 text-sm"
               >
                 Сгенерировать FAQ
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const blob = await downloadPresentationPdf();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = "procompetencies_presentation.pdf";
+                    a.click();
+                    URL.revokeObjectURL(url);
+                    setSuccess("PDF презентация скачана.");
+                  } catch (e) {
+                    setError(e instanceof Error ? e.message : "Ошибка PDF");
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+                className="rounded-xl border border-border px-4 py-2 text-sm"
+              >
+                PDF презентация
               </button>
               {approvedCount > 0 && (
                 <button
@@ -187,7 +274,19 @@ export default function CommunicationsPage() {
                   <button
                     type="button"
                     className="flex w-full items-center justify-between text-left"
-                    onClick={() => setExpanded(isOpen ? null : item.company.id)}
+                    onClick={async () => {
+                      const next = isOpen ? null : item.company.id;
+                      setExpanded(next);
+                      const letter = item.communications.find((c) => c.comm_type === "letter");
+                      if (next && letter && !versions[letter.id]) {
+                        try {
+                          const v = await fetchCommunicationVersions(letter.id);
+                          setVersions((prev) => ({ ...prev, [letter.id]: v.versions }));
+                        } catch {
+                          /* ignore */
+                        }
+                      }
+                    }}
                   >
                     <div className="flex items-center gap-2">
                       <Mail className="h-5 w-5 text-accent" />
@@ -209,7 +308,7 @@ export default function CommunicationsPage() {
 
                   {isOpen && (
                     <div className="mt-4 space-y-4 border-t border-border pt-4">
-                      {!letter && admin && (
+                      {!letter && canEdit && (
                         <div className="flex gap-2">
                           <button
                             type="button"
@@ -244,7 +343,7 @@ export default function CommunicationsPage() {
                           <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-lg bg-surface p-3 text-sm">
                             {letter.body}
                           </pre>
-                          {admin && letter.status !== "approved" && (
+                          {canEdit && letter.status !== "approved" && (
                             <button
                               type="button"
                               disabled={busy}
@@ -254,6 +353,20 @@ export default function CommunicationsPage() {
                               <Send className="h-4 w-4" /> Утвердить письмо
                             </button>
                           )}
+                          {versions[letter.id]?.length ? (
+                            <div>
+                              <h3 className="mb-2 text-sm font-medium">История версий</h3>
+                              <ul className="max-h-40 space-y-2 overflow-auto text-xs text-muted">
+                                {versions[letter.id].map((v) => (
+                                  <li key={v.id} className="rounded border border-border p-2">
+                                    v{v.version} · {v.edited_by || "—"} ·{" "}
+                                    {v.created_at ? new Date(v.created_at).toLocaleString() : ""}
+                                    {v.subject && <div className="mt-1 text-text">{v.subject}</div>}
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : null}
                         </>
                       )}
                       {item.touch_plan.length > 0 && (
@@ -276,6 +389,7 @@ export default function CommunicationsPage() {
           </div>
         </main>
       </div>
+    </CuratorGuard>
     </AuthGuard>
   );
 }

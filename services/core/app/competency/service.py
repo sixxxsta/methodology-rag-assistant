@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import json
 import logging
 from pathlib import Path
@@ -7,15 +9,11 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from ..config import get_settings
-from ..hh_fallback import (
-    hh_error_hint,
-    is_hh_user_agent_rejected,
-    load_demo_vacancies,
-)
 from ..models import Competency, PhaseKey, Vacancy
 from ..services import ensure_workspace, log_action, update_phase
-from .hh_client import HeadHunterClient
-from .skills import aggregate_skill_counts
+from .providers import get_vacancy_provider
+from .providers.base import vacancy_body
+from .skills import aggregate_skill_counts_weighted
 
 logger = logging.getLogger(__name__)
 
@@ -54,47 +52,30 @@ def seed_program_competencies(db: Session, workspace_id: int) -> int:
     return added
 
 
-def collect_from_hh(
+def collect_vacancies(
     db: Session,
     *,
     actor_email: str,
     query: str,
     area_id: str | None = None,
     max_pages: int = 2,
+    provider: str = "hh",
 ) -> dict:
     settings = get_settings()
     ws = ensure_workspace(db)
     seed_program_competencies(db, ws.id)
 
-    demo_mode = False
-    hh_message: str | None = None
-    vacancies: list[dict] = []
+    prov = get_vacancy_provider(provider, settings)
+    vacancies = prov.search_vacancies(
+        text=query,
+        area_id=area_id,
+        max_pages=max_pages,
+    )
+    demo_mode = getattr(prov, "demo_mode", False)
+    provider_message = getattr(prov, "message", None)
+    source = prov.name
 
-    if is_hh_user_agent_rejected(settings.hh_user_agent):
-        demo_mode = True
-        hh_message = (
-            "В HH_USER_AGENT указан example.com — API hh.ru блокирует такой контакт. "
-            "Используются демо-вакансии."
-        )
-        vacancies = load_demo_vacancies(query)
-    else:
-        client = HeadHunterClient(
-            user_agent=settings.hh_user_agent,
-            access_token=settings.hh_access_token,
-        )
-        try:
-            vacancies = client.search_vacancies(
-                text=query,
-                area_id=area_id or settings.hh_default_area_id or None,
-                max_pages=max_pages,
-            )
-        except Exception as exc:
-            logger.warning("HH collect failed, demo fallback: %s", exc)
-            demo_mode = True
-            hh_message = hh_error_hint(exc)
-            vacancies = load_demo_vacancies(query)
-
-    texts: list[str] = []
+    processed: list[dict] = []
     stored = 0
     for v in vacancies:
         ext_id = str(v.get("id", ""))
@@ -105,32 +86,30 @@ def collect_from_hh(
                 .first()
             )
             if exists:
-                texts.append(HeadHunterClient.vacancy_text(v))
+                processed.append(v)
                 continue
 
-        body = HeadHunterClient.vacancy_text(v)
-        texts.append(body)
+        body = vacancy_body(v)
+        processed.append(v)
         db.add(
             Vacancy(
                 workspace_id=ws.id,
                 external_id=ext_id or None,
                 title=(v.get("name") or "Без названия")[:512],
-                source="hh",
+                source=source,
                 raw_text=body[:8000] if body else None,
             )
         )
         stored += 1
 
-    skill_counts = aggregate_skill_counts(texts)
-    total_vacancies = max(len(texts), 1)
+    skill_counts = aggregate_skill_counts_weighted(processed)
 
     db.query(Competency).filter(
         Competency.workspace_id == ws.id,
         Competency.source == "industry",
     ).delete()
 
-    for name, count in skill_counts.items():
-        demand = min(100, int(round(count / total_vacancies * 100)))
+    for name, demand in skill_counts.items():
         db.add(
             Competency(
                 workspace_id=ws.id,
@@ -140,13 +119,13 @@ def collect_from_hh(
             )
         )
 
-    progress = min(90, 20 + len(texts) * 2)
+    progress = min(90, 20 + len(processed) * 2)
     update_phase(
         db,
         PhaseKey.INDUSTRY.value,
         actor_email=actor_email,
         progress_pct=progress,
-        notes=f"Собрано вакансий: {len(texts)}, навыков: {len(skill_counts)}",
+        notes=f"[{source}] вакансий: {len(processed)}, навыков: {len(skill_counts)}",
     )
 
     log_action(
@@ -154,8 +133,8 @@ def collect_from_hh(
         workspace_id=ws.id,
         actor_email=actor_email,
         action="competency.collect",
-        entity_type="hh",
-        details=f"query={query}, vacancies={len(texts)}, skills={len(skill_counts)}",
+        entity_type=source,
+        details=f"provider={source}, query={query}, vacancies={len(processed)}, skills={len(skill_counts)}",
     )
     db.commit()
 
@@ -188,13 +167,58 @@ def collect_from_hh(
             db.commit()
 
     return {
-        "vacancies_collected": len(texts),
+        "vacancies_collected": len(processed),
         "vacancies_new": stored,
         "skills_found": len(skill_counts),
         "query": query,
+        "provider": source,
         "demo_mode": demo_mode,
-        "message": hh_message,
+        "message": provider_message,
     }
+
+
+def collect_from_hh(
+    db: Session,
+    *,
+    actor_email: str,
+    query: str,
+    area_id: str | None = None,
+    max_pages: int = 2,
+) -> dict:
+    return collect_vacancies(
+        db,
+        actor_email=actor_email,
+        query=query,
+        area_id=area_id,
+        max_pages=max_pages,
+        provider="hh",
+    )
+
+
+def export_matrix_csv(db: Session) -> str:
+    data = build_matrix(db)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(
+        [
+            "skill",
+            "program_level",
+            "industry_demand_pct",
+            "industry_level_est",
+            "gap_type",
+        ]
+    )
+    for item in data["items"]:
+        writer.writerow(
+            [
+                item["name"],
+                item["program_level"],
+                item["industry_demand_pct"],
+                item["industry_level_est"],
+                item["gap_type"],
+            ]
+        )
+    return buf.getvalue()
 
 
 def build_matrix(db: Session) -> dict:
@@ -271,6 +295,43 @@ def build_matrix(db: Session) -> dict:
             "excess": excess,
         },
         "items": items,
+    }
+
+
+def matrix_chart(db: Session) -> dict:
+    data = build_matrix(db)
+    by_gap: dict[str, int] = {}
+    for item in data["items"]:
+        gap_type = item["gap_type"]
+        by_gap[gap_type] = by_gap.get(gap_type, 0) + 1
+
+    top_gaps = sorted(
+        [i for i in data["items"] if i["gap_type"] not in ("aligned", "unknown")],
+        key=lambda x: (-x["industry_demand_pct"], x["name"]),
+    )[:12]
+
+    comparison = sorted(data["items"], key=lambda x: (-x["industry_demand_pct"], x["name"]))[:15]
+
+    return {
+        "workspace_id": data["workspace_id"],
+        "industry": data["industry"],
+        "vacancy_count": data["vacancy_count"],
+        "summary": data["summary"],
+        "by_gap_type": [
+            {"gap_type": gap_type, "count": count}
+            for gap_type, count in sorted(by_gap.items(), key=lambda x: -x[1])
+        ],
+        "top_gaps": top_gaps,
+        "comparison": [
+            {
+                "name": item["name"],
+                "program_level": item["program_level"],
+                "industry_level_est": item["industry_level_est"],
+                "industry_demand_pct": item["industry_demand_pct"],
+                "gap_type": item["gap_type"],
+            }
+            for item in comparison
+        ],
     }
 
 
