@@ -86,7 +86,8 @@ export default function CatalogPage() {
           </div>
 
           <p className="mb-4 text-sm text-muted">
-            Опубликованные проекты для студенческих команд.{" "}
+            Опубликованные проекты для студенческих команд. В одном семестре команда может
+            взять только один проект.{" "}
             {student && (
               <>
                 <Link href="/teams" className="text-accent hover:underline">

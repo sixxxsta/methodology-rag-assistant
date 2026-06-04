@@ -8,6 +8,7 @@ import { Sidebar } from "@/components/sidebar";
 import {
   approveProject,
   completeProjectsPhase,
+  extendCatalogProject,
   fetchProjectsDashboard,
   generateProjectTz,
   publishProject,
@@ -338,6 +339,42 @@ export default function ProjectsPage() {
                                     В каталог
                                   </button>
                                 )}
+                                {canEdit &&
+                                  proj.can_extend_catalog &&
+                                  (proj.catalog_visible ||
+                                    proj.catalog_mode === "temporary") && (
+                                    <button
+                                      type="button"
+                                      disabled={busy}
+                                      onClick={async () => {
+                                        const months = window.prompt(
+                                          "Продлить показ в каталоге на сколько месяцев?",
+                                          "5",
+                                        );
+                                        if (!months) return;
+                                        const n = Number(months);
+                                        if (!Number.isFinite(n) || n < 1 || n > 60) {
+                                          setError("Укажите число месяцев от 1 до 60");
+                                          return;
+                                        }
+                                        setBusy(true);
+                                        setError("");
+                                        try {
+                                          await extendCatalogProject(proj.id, n);
+                                          await load();
+                                        } catch (e) {
+                                          setError(
+                                            e instanceof Error ? e.message : "Ошибка",
+                                          );
+                                        } finally {
+                                          setBusy(false);
+                                        }
+                                      }}
+                                      className="rounded-lg border border-amber-500/50 px-3 py-1.5 text-xs text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
+                                    >
+                                      Продлить в каталоге
+                                    </button>
+                                  )}
                               </div>
                             )}
                           </div>

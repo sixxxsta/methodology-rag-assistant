@@ -125,3 +125,62 @@ def remind_catalog_expiring_projects(db: Session) -> dict:
     if sent:
         db.commit()
     return {"reminded": sent, "candidates": len(rows)}
+
+
+def extend_catalog_visibility(
+    db: Session,
+    project_id: int,
+    *,
+    actor_email: str,
+    catalog_months: int | None = None,
+) -> dict:
+    """Extend temporary catalog listing without unpublishing."""
+    from ..cycles.service import get_work_context
+    from ..services import log_action
+
+    months = catalog_months or 5
+    if months < 1 or months > 60:
+        raise ValueError("catalog_months must be 1..60")
+
+    ctx = get_work_context(db)
+    project = (
+        db.query(Project)
+        .filter(Project.cycle_id == ctx.cycle_id, Project.id == project_id)
+        .one()
+    )
+    mode = (project.catalog_mode or CATALOG_MODE_PERMANENT).strip().lower()
+    if mode != CATALOG_MODE_TEMPORARY:
+        raise ValueError("продление доступно только для проектов с ограниченным сроком в каталоге")
+    if project.status != "approved":
+        raise ValueError("утвердите проект перед продлением каталога")
+    if not project.published_at and not project.catalog_visible:
+        raise ValueError("сначала опубликуйте проект в каталог")
+
+    now = datetime.now(timezone.utc)
+    base = project.catalog_visible_until or now
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=timezone.utc)
+    if base < now:
+        base = now
+    new_until = base + timedelta(days=30 * months)
+
+    project.catalog_visible = True
+    project.catalog_visible_until = new_until
+
+    log_action(
+        db,
+        workspace_id=project.workspace_id,
+        actor_email=actor_email,
+        action="catalog.extend",
+        entity_type="project",
+        entity_id=str(project.id),
+        details=f"months={months};until={new_until.isoformat()}",
+    )
+    db.commit()
+    db.refresh(project)
+    return {
+        "catalog_visible": project.catalog_visible,
+        "catalog_visible_until": new_until.isoformat(),
+        "catalog_mode": project.catalog_mode,
+        "months_added": months,
+    }

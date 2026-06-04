@@ -62,6 +62,9 @@ def _project_publish_meta(p: Project) -> dict:
         "publish_ready": ready,
         "publish_block_reason": reason,
         "catalog_expiry_soon": expiry_soon,
+        "can_extend_catalog": mode == CATALOG_MODE_TEMPORARY
+        and p.status == "approved"
+        and (p.catalog_visible or p.published_at is not None),
     }
 
 

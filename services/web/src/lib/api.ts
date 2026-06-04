@@ -583,6 +583,8 @@ export async function fetchProjectsDashboard() {
       publish_ready?: boolean;
       publish_block_reason?: string | null;
       catalog_expiry_soon?: { days_left: number; until: string } | null;
+      can_extend_catalog?: boolean;
+      catalog_mode?: string;
     }>;
   }>(res);
 }
@@ -710,7 +712,8 @@ export type CatalogProjectDetail = {
   team_members_short?: number;
   my_team?: StudentTeam | null;
   my_team_claim?: { project_id: number; project_title?: string | null; team_id: number; status: string } | null;
-  can_claim_as_leader?: boolean;
+  semester_claim_blocked?: boolean;
+  semester_claim_block_reason?: string | null;
   my_enrollment?: {
     id: number | null;
     team_id?: number;
@@ -839,6 +842,20 @@ export async function publishProject(
     body: JSON.stringify(options),
   });
   return handleResponse(res);
+}
+
+export async function extendCatalogProject(projectId: number, catalogMonths = 5) {
+  const res = await fetch(`/api/ed/projects/${projectId}/catalog/extend`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ catalog_months: catalogMonths }),
+  });
+  return handleResponse<{
+    catalog_visible: boolean;
+    catalog_visible_until: string;
+    catalog_mode: string;
+    months_added: number;
+  }>(res);
 }
 
 export async function completeProjectsPhase() {

@@ -172,6 +172,8 @@ export default function CatalogProjectPage({ params }: Props) {
                       {project.my_team_claim?.project_title || `#${project.my_team_claim?.project_id}`}.
                       Сначала отмените его (лидер).
                     </p>
+                  ) : project.semester_claim_blocked && project.semester_claim_block_reason ? (
+                    <p className="text-sm text-amber-400">{project.semester_claim_block_reason}</p>
                   ) : isLeader ? (
                     <div className="space-y-3">
                       <p className="text-sm text-muted">

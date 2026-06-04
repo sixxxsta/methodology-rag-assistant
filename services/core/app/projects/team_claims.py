@@ -38,6 +38,24 @@ def get_active_claim_for_team(db: Session, team_id: int) -> ProjectTeamClaim | N
     )
 
 
+def team_claim_in_cycle(
+    db: Session, team_id: int, cycle_id: int, *, exclude_project_id: int | None = None
+) -> ProjectTeamClaim | None:
+    """Any claim (active or withdrawn) by this team on a project in the partnership cycle (semester)."""
+    q = (
+        db.query(ProjectTeamClaim)
+        .join(Project, ProjectTeamClaim.project_id == Project.id)
+        .filter(
+            ProjectTeamClaim.team_id == team_id,
+            Project.cycle_id == cycle_id,
+            ProjectTeamClaim.status.in_((CLAIM_ACTIVE, CLAIM_WITHDRAWN)),
+        )
+    )
+    if exclude_project_id is not None:
+        q = q.filter(ProjectTeamClaim.project_id != exclude_project_id)
+    return q.order_by(ProjectTeamClaim.id.desc()).first()
+
+
 def _claim_dict(claim: ProjectTeamClaim, project: Project | None = None) -> dict:
     return {
         "id": claim.id,
@@ -74,6 +92,8 @@ def viewer_team_context(
             "min_team_members_to_claim": MIN_TEAM_MEMBERS_TO_CLAIM,
             "team_member_count": 0,
             "team_members_short": MIN_TEAM_MEMBERS_TO_CLAIM,
+            "semester_claim_blocked": False,
+            "semester_claim_block_reason": None,
         }
 
     email = _norm(viewer_email)
@@ -86,12 +106,16 @@ def viewer_team_context(
             "min_team_members_to_claim": MIN_TEAM_MEMBERS_TO_CLAIM,
             "team_member_count": 0,
             "team_members_short": MIN_TEAM_MEMBERS_TO_CLAIM,
+            "semester_claim_blocked": False,
+            "semester_claim_block_reason": None,
         }
 
     from ..teams.service import _team_dict
 
     claim = get_active_claim_for_team(db, team.id)
     my_claim = None
+    semester_blocked = False
+    semester_block_reason: str | None = None
     if claim:
         proj = db.query(Project).filter(Project.id == claim.project_id).one_or_none()
         my_claim = _claim_dict(claim, proj)
@@ -106,9 +130,21 @@ def viewer_team_context(
     project = db.query(Project).filter(Project.id == project_id).one_or_none()
     teams_left = catalog_teams_meta(db, project)["teams_left"] if project else 0
 
+    if project:
+        prior = team_claim_in_cycle(db, team.id, project.cycle_id, exclude_project_id=project_id)
+        if prior:
+            semester_blocked = True
+            prior_proj = db.query(Project).filter(Project.id == prior.project_id).one_or_none()
+            title = prior_proj.title if prior_proj else f"#{prior.project_id}"
+            semester_block_reason = (
+                f"команда уже выбирала проект в этом семестре: «{title}». "
+                "Раз в семестр доступен только один проект."
+            )
+
     can_claim = bool(
         is_leader
         and claim is None
+        and not semester_blocked
         and teams_left > 0
         and project is not None
         and member_count >= min_required
@@ -121,6 +157,8 @@ def viewer_team_context(
         "min_team_members_to_claim": min_required,
         "team_member_count": member_count,
         "team_members_short": max(0, min_required - member_count),
+        "semester_claim_blocked": semester_blocked,
+        "semester_claim_block_reason": semester_block_reason,
     }
 
 
@@ -147,6 +185,15 @@ def claim_project_for_team(
         .filter(Project.id == project_id, *catalog_visible_filter())
         .one()
     )
+
+    prior = team_claim_in_cycle(db, team.id, project.cycle_id, exclude_project_id=project_id)
+    if prior:
+        prior_proj = db.query(Project).filter(Project.id == prior.project_id).one_or_none()
+        title = prior_proj.title if prior_proj else f"#{prior.project_id}"
+        raise ValueError(
+            f"команда уже выбирала проект в этом семестре: «{title}». "
+            "Раз в семестр доступен только один проект"
+        )
 
     max_teams = project.max_teams or 1
     if active_team_claims_count(db, project.id) >= max_teams:

@@ -20,6 +20,7 @@ from .service import (
     resync_project_roles,
     update_project,
 )
+from .catalog import extend_catalog_visibility
 from .matching import get_student_profile, recommend_projects, upsert_student_profile
 from .enrollment import enroll_student, list_my_enrollments, withdraw_enrollment
 from .team_claims import claim_project_for_team, withdraw_team_claim
@@ -285,6 +286,30 @@ class PublishIn(BaseModel):
         default=None,
         description="ISO date when catalog entry expires (temporary mode)",
     )
+
+
+class ExtendCatalogIn(BaseModel):
+    catalog_months: int = Field(default=5, ge=1, le=60)
+
+
+@router.post("/{project_id}/catalog/extend")
+def catalog_extend(
+    project_id: int,
+    body: ExtendCatalogIn,
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
+):
+    try:
+        return extend_catalog_visibility(
+            db,
+            project_id,
+            actor_email=user["email"],
+            catalog_months=body.catalog_months,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/{project_id}/publish")
