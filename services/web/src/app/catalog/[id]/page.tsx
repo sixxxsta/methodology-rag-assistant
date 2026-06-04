@@ -5,9 +5,9 @@ import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
 import { Sidebar } from "@/components/sidebar";
 import {
-  enrollInProject,
+  claimProjectForTeam,
   fetchCatalogProject,
-  withdrawFromProject,
+  withdrawTeamProjectClaim,
   type CatalogProjectDetail,
 } from "@/lib/api";
 import { getUser, isStudent } from "@/lib/auth";
@@ -18,7 +18,6 @@ type Props = { params: Promise<{ id: string }> };
 export default function CatalogProjectPage({ params }: Props) {
   const [projectId, setProjectId] = useState<number | null>(null);
   const [project, setProject] = useState<CatalogProjectDetail | null>(null);
-  const [selectedRole, setSelectedRole] = useState<number | "">("");
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(true);
@@ -46,18 +45,28 @@ export default function CatalogProjectPage({ params }: Props) {
     load();
   }, [load]);
 
-  async function onEnroll() {
+  const hasClaim =
+    project?.my_team_claim?.project_id === projectId &&
+    project?.my_team_claim?.status === "active";
+  const teamsFull = (project?.teams_left ?? 0) <= 0;
+  const isLeader = project?.my_team?.is_leader === true;
+  const hasTeam = !!project?.my_team;
+  const otherProjectClaim =
+    project?.my_team_claim &&
+    project.my_team_claim.project_id !== projectId &&
+    project.my_team_claim.status === "active";
+
+  async function onClaim() {
     if (!projectId) return;
     setBusy(true);
     setError("");
     setInfo("");
     try {
-      const roleId = selectedRole === "" ? undefined : Number(selectedRole);
-      await enrollInProject(projectId, roleId);
-      setInfo("Вы записаны на проект");
+      await claimProjectForTeam(projectId);
+      setInfo("Проект выбран для вашей команды");
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Ошибка записи");
+      setError(e instanceof Error ? e.message : "Ошибка");
     } finally {
       setBusy(false);
     }
@@ -69,8 +78,8 @@ export default function CatalogProjectPage({ params }: Props) {
     setError("");
     setInfo("");
     try {
-      await withdrawFromProject(projectId);
-      setInfo("Запись отменена");
+      await withdrawTeamProjectClaim(projectId);
+      setInfo("Выбор проекта отменён");
       await load();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка");
@@ -78,11 +87,6 @@ export default function CatalogProjectPage({ params }: Props) {
       setBusy(false);
     }
   }
-
-  const canEnroll =
-    student &&
-    !project?.my_enrollment &&
-    (project?.seats_left ?? 0) > 0;
 
   return (
     <AuthGuard>
@@ -115,99 +119,101 @@ export default function CatalogProjectPage({ params }: Props) {
                 <p className="mt-2 text-accent">{project.company_name}</p>
               )}
               <div className="mt-4 flex flex-wrap gap-4 text-sm text-muted">
-                {project.team_size != null && <span>Команда: {project.team_size}</span>}
+                {project.team_member_size != null && (
+                  <span>Размер команды: до {Math.min(project.team_member_size, 5)} чел.</span>
+                )}
                 {project.duration_weeks != null && (
                   <span>Срок: {project.duration_weeks} нед.</span>
                 )}
-                {project.competencies && (
-                  <span>Компетенции: {project.competencies}</span>
-                )}
                 <span>
-                  Мест: {project.enrollment_count ?? 0}/{project.team_size ?? "—"} ·
-                  свободно {project.seats_left ?? 0}
+                  Команд на проект: {project.teams_claimed ?? 0}/{project.max_teams ?? "—"}
+                  {(project.teams_left ?? 0) > 0
+                    ? ` · свободно ${project.teams_left}`
+                    : " · мест нет"}
                 </span>
               </div>
 
-              {project.roles && project.roles.length > 0 && (
-                <section className="mt-6 rounded-2xl border border-border bg-surface-2 p-5">
-                  <h2 className="mb-3 font-semibold">Роли в команде</h2>
-                  <ul className="space-y-2 text-sm">
-                    {project.roles.map((role) => (
-                      <li
-                        key={role.id}
-                        className="rounded-lg border border-border/60 px-3 py-2"
-                      >
-                        <p className="font-medium">{role.title}</p>
-                        {role.skills && (
-                          <p className="text-muted">Навыки: {role.skills}</p>
-                        )}
-                        <p className="text-xs text-muted">
-                          Свободно {role.seats_left} из {role.slots}
-                          {role.hours_per_week != null && ` · ${role.hours_per_week} ч/нед`}
-                        </p>
-                      </li>
-                    ))}
-                  </ul>
-                </section>
-              )}
-
               {student && (
                 <section className="mt-6 rounded-2xl border border-border bg-surface-2 p-5">
-                  <h2 className="mb-3 font-semibold">Запись на проект</h2>
-                  {project.my_enrollment ? (
+                  <h2 className="mb-3 font-semibold">Выбор проекта командой</h2>
+                  {!hasTeam ? (
+                    <p className="text-sm text-muted">
+                      Сначала{" "}
+                      <Link href="/teams" className="text-accent hover:underline">
+                        создайте команду или вступите по коду
+                      </Link>
+                      .
+                    </p>
+                  ) : hasClaim ? (
                     <div className="space-y-3">
                       <p className="text-sm text-emerald-400">
-                        Вы записаны
-                        {project.my_enrollment.role_title
-                          ? ` · роль: ${project.my_enrollment.role_title}`
-                          : ""}
+                        Ваша команда выбрала этот проект
+                        {project.my_team?.name ? ` («${project.my_team.name}»)` : ""}.
                       </p>
-                      <button
-                        type="button"
-                        onClick={onWithdraw}
-                        disabled={busy}
-                        className="rounded-xl border border-red-500/40 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50"
-                      >
-                        {busy ? "…" : "Отменить запись"}
-                      </button>
+                      {isLeader && (
+                        <button
+                          type="button"
+                          onClick={onWithdraw}
+                          disabled={busy}
+                          className="rounded-xl border border-red-500/40 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+                        >
+                          {busy ? "…" : "Отменить выбор (лидер)"}
+                        </button>
+                      )}
+                      {!isLeader && (
+                        <p className="text-xs text-muted">
+                          Отменить выбор может только лидер: {project.my_team?.leader_email}
+                        </p>
+                      )}
                     </div>
-                  ) : canEnroll ? (
+                  ) : otherProjectClaim ? (
+                    <p className="text-sm text-muted">
+                      Команда уже выбрала другой проект:{" "}
+                      {project.my_team_claim?.project_title || `#${project.my_team_claim?.project_id}`}.
+                      Сначала отмените его (лидер).
+                    </p>
+                  ) : isLeader ? (
                     <div className="space-y-3">
-                      {project.roles && project.roles.length > 0 && (
-                        <label className="block text-sm text-muted">
-                          Роль (необязательно)
-                          <select
-                            value={selectedRole}
-                            onChange={(e) =>
-                              setSelectedRole(
-                                e.target.value === "" ? "" : Number(e.target.value),
-                              )
-                            }
-                            className="mt-1 w-full rounded-xl border border-border bg-surface px-3 py-2 text-text"
-                          >
-                            <option value="">Любая свободная</option>
-                            {project.roles
-                              .filter((r) => r.seats_left > 0)
-                              .map((r) => (
-                                <option key={r.id} value={r.id}>
-                                  {r.title} ({r.seats_left} мест)
-                                </option>
-                              ))}
-                          </select>
-                        </label>
+                      <p className="text-sm text-muted">
+                        Участников в команде: {project.team_member_count ?? project.my_team?.member_count ?? 0}
+                        /5 (минимум {project.min_team_members_to_claim ?? 3} для выбора проекта).
+                      </p>
+                      {(project.team_members_short ?? 0) > 0 && (
+                        <p className="text-xs text-amber-400">
+                          Не хватает {project.team_members_short} участник(ов). Пригласите в{" "}
+                          <Link href="/teams" className="text-accent hover:underline">
+                            команду
+                          </Link>
+                          .
+                        </p>
                       )}
                       <button
                         type="button"
-                        onClick={onEnroll}
-                        disabled={busy}
+                        onClick={onClaim}
+                        disabled={busy || teamsFull || !project.can_claim_as_leader}
                         className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50"
                       >
                         {busy && <Loader2 className="h-4 w-4 animate-spin" />}
-                        Записаться
+                        Выбрать проект для команды
                       </button>
+                      {teamsFull && (
+                        <p className="text-xs text-amber-400">
+                          Все слоты команд заняты — выбрать нельзя.
+                        </p>
+                      )}
+                      {!teamsFull &&
+                        (project.team_members_short ?? 0) > 0 &&
+                        isLeader && (
+                          <p className="text-xs text-muted">
+                            Кнопка станет доступна при {project.min_team_members_to_claim ?? 3}{" "}
+                            участниках в команде.
+                          </p>
+                        )}
                     </div>
                   ) : (
-                    <p className="text-sm text-muted">Нет свободных мест в команде.</p>
+                    <p className="text-sm text-muted">
+                      Проект выбирает лидер команды ({project.my_team?.leader_email}).
+                    </p>
                   )}
                 </section>
               )}

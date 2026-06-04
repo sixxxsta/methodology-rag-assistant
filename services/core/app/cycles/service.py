@@ -17,7 +17,10 @@ from ..models import (
     Vacancy,
     Workspace,
 )
-from .context import get_request_cycle_id
+from .context import get_request_cycle_id, get_request_user
+
+
+DELETED_STATUS = "deleted"
 
 
 @dataclass
@@ -32,6 +35,42 @@ class WorkContext:
     @property
     def cycle_id(self) -> int:
         return self.cycle.id
+
+
+def _norm_email(email: str | None) -> str:
+    return (email or "").strip().lower()
+
+
+
+def _is_admin(user: dict[str, str]) -> bool:
+    return user.get("role") == "admin"
+
+
+def _cycles_query(db: Session, workspace_id: int, user: dict[str, str] | None = None):
+    q = db.query(PartnershipCycle).filter(
+        PartnershipCycle.workspace_id == workspace_id,
+        PartnershipCycle.status != DELETED_STATUS,
+    )
+    if user and not _is_admin(user):
+        email = _norm_email(user["email"])
+        q = q.filter(PartnershipCycle.created_by == email)
+    return q
+
+
+def _get_cycle_or_raise(
+    db: Session,
+    workspace_id: int,
+    cycle_id: int,
+    user: dict[str, str] | None = None,
+) -> PartnershipCycle:
+    cycle = (
+        _cycles_query(db, workspace_id, user)
+        .filter(PartnershipCycle.id == cycle_id)
+        .one_or_none()
+    )
+    if not cycle:
+        raise ValueError("cycle not found")
+    return cycle
 
 
 def ensure_workspace(db: Session) -> Workspace:
@@ -93,47 +132,56 @@ def get_phase_run(db: Session, cycle_id: int, phase_key: str) -> PhaseRun:
     return run
 
 
-def _active_cycle_query(db: Session, workspace_id: int):
+def _active_cycle_for_user(db: Session, ws: Workspace, user: dict[str, str]) -> PartnershipCycle | None:
     return (
-        db.query(PartnershipCycle)
-        .filter(
-            PartnershipCycle.workspace_id == workspace_id,
-            PartnershipCycle.status == "active",
-        )
+        _cycles_query(db, ws.id, user)
+        .filter(PartnershipCycle.status == "active")
         .order_by(PartnershipCycle.id.desc())
+        .first()
     )
 
 
-def ensure_default_cycle(db: Session, ws: Workspace) -> PartnershipCycle:
-    cycle = _active_cycle_query(db, ws.id).first()
+def ensure_default_cycle(db: Session, ws: Workspace, user: dict[str, str]) -> PartnershipCycle:
+    cycle = _active_cycle_for_user(db, ws, user)
     if cycle:
         ensure_phase_runs(db, cycle.id)
         return cycle
 
-    any_cycle = (
-        db.query(PartnershipCycle)
-        .filter(PartnershipCycle.workspace_id == ws.id)
-        .order_by(PartnershipCycle.id)
-        .first()
-    )
+    any_cycle = _cycles_query(db, ws.id, user).order_by(PartnershipCycle.id.desc()).first()
     if any_cycle:
         any_cycle.status = "active"
         ensure_phase_runs(db, any_cycle.id)
         db.commit()
         return any_cycle
 
-    return create_cycle(db, name="Цикл 1", actor_email="system", activate=True)
+    return create_cycle(
+        db,
+        name="Цикл 1",
+        actor_email=user["email"],
+        activate=True,
+    )
 
 
 def get_work_context(db: Session, cycle_id: int | None = None) -> WorkContext:
+    user = get_request_user()
     ws = ensure_workspace(db)
     requested = cycle_id if cycle_id is not None else get_request_cycle_id()
+
+    if user and user.get("email"):
+        if requested is not None:
+            cycle = _get_cycle_or_raise(db, ws.id, requested, user)
+            ensure_phase_runs(db, cycle.id)
+            return WorkContext(workspace=ws, cycle=cycle)
+        cycle = ensure_default_cycle(db, ws, user)
+        return WorkContext(workspace=ws, cycle=cycle)
+
     if requested is not None:
         cycle = (
             db.query(PartnershipCycle)
             .filter(
-                PartnershipCycle.id == requested,
                 PartnershipCycle.workspace_id == ws.id,
+                PartnershipCycle.id == requested,
+                PartnershipCycle.status != DELETED_STATUS,
             )
             .one_or_none()
         )
@@ -142,7 +190,28 @@ def get_work_context(db: Session, cycle_id: int | None = None) -> WorkContext:
         ensure_phase_runs(db, cycle.id)
         return WorkContext(workspace=ws, cycle=cycle)
 
-    cycle = ensure_default_cycle(db, ws)
+    cycle = (
+        db.query(PartnershipCycle)
+        .filter(
+            PartnershipCycle.workspace_id == ws.id,
+            PartnershipCycle.status == "active",
+        )
+        .order_by(PartnershipCycle.id.desc())
+        .first()
+    )
+    if not cycle:
+        cycle = (
+            db.query(PartnershipCycle)
+            .filter(
+                PartnershipCycle.workspace_id == ws.id,
+                PartnershipCycle.status != DELETED_STATUS,
+            )
+            .order_by(PartnershipCycle.id.desc())
+            .first()
+        )
+    if not cycle:
+        raise ValueError("no partnership cycle")
+    ensure_phase_runs(db, cycle.id)
     return WorkContext(workspace=ws, cycle=cycle)
 
 
@@ -158,22 +227,22 @@ def _cycle_dict(cycle: PartnershipCycle, *, project_count: int = 0, company_coun
         "project_count": project_count,
         "company_count": company_count,
         "is_active": cycle.status == "active",
+        "is_owner": True,
     }
 
 
-def list_cycles(db: Session) -> list[dict]:
+def list_cycles(db: Session, *, actor_email: str, actor_role: str) -> list[dict]:
+    user = {"email": actor_email, "role": actor_role}
     ws = ensure_workspace(db)
-    rows = (
-        db.query(PartnershipCycle)
-        .filter(PartnershipCycle.workspace_id == ws.id)
-        .order_by(PartnershipCycle.id.desc())
-        .all()
-    )
+    rows = _cycles_query(db, ws.id, user).order_by(PartnershipCycle.id.desc()).all()
+    email = _norm_email(actor_email)
     out: list[dict] = []
     for cycle in rows:
         pc = db.query(Project).filter(Project.cycle_id == cycle.id).count()
         cc = db.query(Company).filter(Company.cycle_id == cycle.id).count()
-        out.append(_cycle_dict(cycle, project_count=pc, company_count=cc))
+        item = _cycle_dict(cycle, project_count=pc, company_count=cc)
+        item["is_owner"] = _is_admin(user) or _norm_email(cycle.created_by) == email
+        out.append(item)
     return out
 
 
@@ -182,23 +251,24 @@ def create_cycle(
     *,
     name: str | None = None,
     actor_email: str,
+    actor_role: str = "curator",
     activate: bool = True,
-) -> dict:
+) -> PartnershipCycle:
+    user = {"email": actor_email, "role": actor_role}
     ws = ensure_workspace(db)
-    count = db.query(PartnershipCycle).filter(PartnershipCycle.workspace_id == ws.id).count()
+    email = _norm_email(actor_email)
+    count = _cycles_query(db, ws.id, user).count()
     label = (name or "").strip() or f"Цикл {count + 1}"
 
     if activate:
-        db.query(PartnershipCycle).filter(PartnershipCycle.workspace_id == ws.id).update(
-            {"status": "archived"},
-            synchronize_session=False,
-        )
+        for row in _cycles_query(db, ws.id, user).filter(PartnershipCycle.status == "active").all():
+            row.status = "archived"
 
     cycle = PartnershipCycle(
         workspace_id=ws.id,
         name=label,
         status="active" if activate else "archived",
-        created_by=actor_email,
+        created_by=email,
     )
     db.add(cycle)
     db.flush()
@@ -210,38 +280,77 @@ def create_cycle(
 
     db.commit()
     db.refresh(cycle)
-    return _cycle_dict(cycle)
+    return cycle
 
 
-def set_active_cycle(db: Session, cycle_id: int, *, actor_email: str) -> dict:
+def set_active_cycle(
+    db: Session,
+    cycle_id: int,
+    *,
+    actor_email: str,
+    actor_role: str = "curator",
+) -> dict:
+    user = {"email": actor_email, "role": actor_role}
     ws = ensure_workspace(db)
-    cycle = (
-        db.query(PartnershipCycle)
-        .filter(PartnershipCycle.id == cycle_id, PartnershipCycle.workspace_id == ws.id)
-        .one_or_none()
-    )
-    if not cycle:
-        raise ValueError("cycle not found")
+    cycle = _get_cycle_or_raise(db, ws.id, cycle_id, user)
 
-    db.query(PartnershipCycle).filter(PartnershipCycle.workspace_id == ws.id).update(
-        {"status": "archived"},
-        synchronize_session=False,
-    )
+    for row in _cycles_query(db, ws.id, user).filter(PartnershipCycle.status == "active").all():
+        row.status = "archived"
     cycle.status = "active"
     db.commit()
     db.refresh(cycle)
     return _cycle_dict(cycle)
 
 
-def reopen_phase(db: Session, cycle_id: int, phase_key: str, *, actor_email: str) -> dict:
+def delete_cycle(
+    db: Session,
+    cycle_id: int,
+    *,
+    actor_email: str,
+    actor_role: str = "curator",
+) -> dict:
+    user = {"email": actor_email, "role": actor_role}
     ws = ensure_workspace(db)
-    cycle = (
-        db.query(PartnershipCycle)
-        .filter(PartnershipCycle.id == cycle_id, PartnershipCycle.workspace_id == ws.id)
-        .one_or_none()
+    cycle = _get_cycle_or_raise(db, ws.id, cycle_id, user)
+    was_active = cycle.status == "active"
+    cycle.status = DELETED_STATUS
+
+    from ..services import log_action
+
+    log_action(
+        db,
+        workspace_id=ws.id,
+        actor_email=actor_email,
+        action="cycle.delete",
+        entity_type="cycle",
+        entity_id=str(cycle_id),
     )
-    if not cycle:
-        raise ValueError("cycle not found")
+
+    if was_active:
+        replacement = (
+            _cycles_query(db, ws.id, user)
+            .filter(PartnershipCycle.id != cycle_id)
+            .order_by(PartnershipCycle.id.desc())
+            .first()
+        )
+        if replacement:
+            replacement.status = "active"
+
+    db.commit()
+    return {"status": "deleted", "cycle_id": cycle_id}
+
+
+def reopen_phase(
+    db: Session,
+    cycle_id: int,
+    phase_key: str,
+    *,
+    actor_email: str,
+    actor_role: str = "curator",
+) -> dict:
+    user = {"email": actor_email, "role": actor_role}
+    ws = ensure_workspace(db)
+    cycle = _get_cycle_or_raise(db, ws.id, cycle_id, user)
 
     run = get_phase_run(db, cycle.id, phase_key)
     run.status = PhaseStatus.ACTIVE.value
@@ -279,7 +388,6 @@ def unlock_next_phase(db: Session, cycle_id: int, completed_key: PhaseKey) -> No
 
 
 def migrate_legacy_workspace_to_cycles(db: Session) -> None:
-    """One-time: attach existing rows without cycle_id to a default cycle."""
     ws = ensure_workspace(db)
     if db.query(PartnershipCycle).filter(PartnershipCycle.workspace_id == ws.id).first():
         return
@@ -305,13 +413,5 @@ def migrate_legacy_workspace_to_cycles(db: Session) -> None:
             model.workspace_id == ws.id,
             col.is_(None),
         ).update({col.key: cycle.id}, synchronize_session=False)
-
-    old_phases = (
-        db.query(PhaseRun)
-        .filter(PhaseRun.cycle_id == cycle.id)
-        .all()
-    )
-    if len(old_phases) == len(PHASE_ORDER):
-        pass
 
     db.commit()

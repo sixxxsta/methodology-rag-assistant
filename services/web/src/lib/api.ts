@@ -167,6 +167,7 @@ export type PartnershipCycle = {
   project_count?: number;
   company_count?: number;
   is_active: boolean;
+  is_owner?: boolean;
 };
 
 export async function fetchCycles() {
@@ -200,6 +201,25 @@ export async function reopenCyclePhase(cycleId: number, phaseKey: string) {
   });
   return handleResponse(res);
 }
+
+export async function deletePartnershipCycle(cycleId: number) {
+  const res = await fetch(`/api/ed/cycles/${cycleId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  const data = await handleResponse<{ status: string; cycle_id: number }>(res);
+  const remaining = (await fetchCycles().catch(() => ({ cycles: [] }))).cycles;
+  const active = remaining.find((c) => c.is_active);
+  if (active) setCycleId(active.id);
+  else if (remaining[0]) setCycleId(remaining[0].id);
+  return data;
+}
+
+export type PublishCatalogOptions = {
+  catalog_mode: "permanent" | "temporary";
+  catalog_months?: number;
+  catalog_until?: string;
+};
 
 export async function approveIndustry(industry: string, comment?: string) {
   const res = await fetch("/api/ed/industry/approve", {
@@ -557,8 +577,12 @@ export async function fetchProjectsDashboard() {
       status: string;
       catalog_visible: boolean;
       team_size?: number | null;
+      max_teams?: number;
       duration_weeks?: number | null;
       competencies?: string | null;
+      publish_ready?: boolean;
+      publish_block_reason?: string | null;
+      catalog_expiry_soon?: { days_left: number; until: string } | null;
     }>;
   }>(res);
 }
@@ -579,8 +603,10 @@ export async function fetchProjectCatalog(competencies?: string) {
       competencies?: string | null;
       cycle_name?: string | null;
       published_at?: string | null;
-      enrollment_count?: number;
-      seats_left?: number;
+      max_teams?: number;
+      teams_claimed?: number;
+      teams_left?: number;
+      team_member_size?: number | null;
     }>;
   }>(res);
 }
@@ -595,6 +621,74 @@ export type CatalogProjectRole = {
   seats_left: number;
 };
 
+export type StudentTeam = {
+  id: number;
+  name: string | null;
+  leader_email: string;
+  invite_code: string;
+  max_members: number;
+  member_count: number;
+  status: string;
+  is_leader: boolean;
+  members: Array<{ student_email: string; is_leader: boolean; joined_at?: string | null }>;
+};
+
+export async function fetchMyTeam() {
+  const res = await fetch("/api/ed/teams/me", { headers: authHeaders() });
+  return handleResponse<{ team: StudentTeam | null }>(res);
+}
+
+export async function createStudentTeam(name?: string) {
+  const res = await fetch("/api/ed/teams", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ name: name || null }),
+  });
+  return handleResponse<{ team: StudentTeam }>(res);
+}
+
+export async function joinStudentTeam(inviteCode: string) {
+  const res = await fetch("/api/ed/teams/join", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ invite_code: inviteCode.trim().toUpperCase() }),
+  });
+  return handleResponse<{ team: StudentTeam }>(res);
+}
+
+export async function leaveStudentTeam() {
+  const res = await fetch("/api/ed/teams/leave", {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return handleResponse<{ status: string; team_id: number }>(res);
+}
+
+export async function transferTeamLeadership(newLeaderEmail: string) {
+  const res = await fetch("/api/ed/teams/transfer-leadership", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ new_leader_email: newLeaderEmail.trim().toLowerCase() }),
+  });
+  return handleResponse<{ team: StudentTeam }>(res);
+}
+
+export async function claimProjectForTeam(projectId: number) {
+  const res = await fetch(`/api/ed/projects/catalog/${projectId}/claim`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return handleResponse<{ id: number; project_id: number; team_id: number; status: string }>(res);
+}
+
+export async function withdrawTeamProjectClaim(projectId: number) {
+  const res = await fetch(`/api/ed/projects/catalog/${projectId}/claim`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  return handleResponse<{ status: string; project_id: number; team_id: number }>(res);
+}
+
 export type CatalogProjectDetail = {
   id: number;
   title: string;
@@ -602,17 +696,26 @@ export type CatalogProjectDetail = {
   description?: string | null;
   spec_markdown?: string | null;
   team_size?: number | null;
+  team_member_size?: number | null;
+  max_teams?: number;
+  teams_claimed?: number;
+  teams_left?: number;
   duration_weeks?: number | null;
   competencies?: string | null;
   published_at?: string | null;
-  enrollment_count?: number;
-  seats_left?: number;
   roles?: CatalogProjectRole[];
+  can_claim_as_leader?: boolean;
+  min_team_members_to_claim?: number;
+  team_member_count?: number;
+  team_members_short?: number;
+  my_team?: StudentTeam | null;
+  my_team_claim?: { project_id: number; project_title?: string | null; team_id: number; status: string } | null;
+  can_claim_as_leader?: boolean;
   my_enrollment?: {
-    id: number;
-    role_id?: number | null;
-    role_title?: string | null;
+    id: number | null;
+    team_id?: number;
     status: string;
+    via_team?: boolean;
   } | null;
 };
 
@@ -705,6 +808,7 @@ export async function updateProject(
     title?: string;
     spec_markdown?: string;
     team_size?: number;
+    max_teams?: number;
     duration_weeks?: number;
     competencies?: string;
   },
@@ -725,10 +829,14 @@ export async function approveProject(projectId: number) {
   return handleResponse(res);
 }
 
-export async function publishProject(projectId: number) {
+export async function publishProject(
+  projectId: number,
+  options: PublishCatalogOptions = { catalog_mode: "permanent" },
+) {
   const res = await fetch(`/api/ed/projects/${projectId}/publish`, {
     method: "POST",
-    headers: authHeaders(),
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(options),
   });
   return handleResponse(res);
 }

@@ -22,6 +22,7 @@ from .service import (
 )
 from .matching import get_student_profile, recommend_projects, upsert_student_profile
 from .enrollment import enroll_student, list_my_enrollments, withdraw_enrollment
+from .team_claims import claim_project_for_team, withdraw_team_claim
 from .roles import list_project_roles
 
 router = APIRouter(prefix="/projects", tags=["projects"])
@@ -34,7 +35,8 @@ class GenerateIn(BaseModel):
 class UpdateIn(BaseModel):
     title: str | None = None
     spec_markdown: str | None = None
-    team_size: int | None = None
+    team_size: int | None = Field(default=None, ge=1, le=5)
+    max_teams: int | None = Field(default=None, ge=1, le=50)
     duration_weeks: int | None = None
     competencies: str | None = None
 
@@ -117,6 +119,37 @@ def catalog_project(
         return get_catalog_project(db, project_id, viewer_email=user["email"])
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/catalog/{project_id}/claim")
+def catalog_claim(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_student)] = None,
+):
+    try:
+        return claim_project_for_team(
+            db,
+            project_id,
+            leader_email=user["email"],
+            leader_user_id=user.get("user_id"),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/catalog/{project_id}/claim")
+def catalog_claim_withdraw(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_student)] = None,
+):
+    try:
+        return withdraw_team_claim(db, project_id, leader_email=user["email"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/catalog/{project_id}/enroll")
@@ -223,6 +256,7 @@ def patch_project(
             title=body.title,
             spec_markdown=body.spec_markdown,
             team_size=body.team_size,
+            max_teams=body.max_teams,
             duration_weeks=body.duration_weeks,
             competencies=body.competencies,
         )
@@ -244,14 +278,36 @@ def approve(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+class PublishIn(BaseModel):
+    catalog_mode: str = Field(default="permanent", pattern="^(permanent|temporary)$")
+    catalog_months: int | None = Field(default=None, ge=1, le=60)
+    catalog_until: str | None = Field(
+        default=None,
+        description="ISO date when catalog entry expires (temporary mode)",
+    )
+
+
 @router.post("/{project_id}/publish")
 def publish(
     project_id: int,
+    body: PublishIn,
     db: Session = Depends(get_db),
     user: Annotated[dict[str, str], Depends(require_curator)] = None,
 ):
     try:
-        return publish_to_catalog(db, project_id, actor_email=user["email"])
+        until_dt = None
+        if body.catalog_until:
+            from datetime import datetime
+
+            until_dt = datetime.fromisoformat(body.catalog_until.replace("Z", "+00:00"))
+        return publish_to_catalog(
+            db,
+            project_id,
+            actor_email=user["email"],
+            catalog_mode=body.catalog_mode,
+            catalog_months=body.catalog_months,
+            catalog_until=until_dt,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:

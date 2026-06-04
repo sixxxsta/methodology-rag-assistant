@@ -3,9 +3,9 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from ..models import Company, Project, StudentProfile
-from ..cycles.service import get_work_context
-from .enrollment import active_enrollment_count
-from .service import _catalog_meta, _project_dict
+from .catalog import catalog_visible_filter
+from .team_claims import catalog_teams_meta
+from .service import _project_dict
 
 
 def _parse_skills(raw: str | None) -> set[str]:
@@ -50,24 +50,20 @@ def get_student_profile(db: Session, student_email: str) -> dict | None:
 
 
 def recommend_projects(db: Session, *, student_email: str, limit: int = 10) -> list[dict]:
-    ctx = get_work_context(db)
-    ws = ctx.workspace
-    cid = ctx.cycle_id
     profile = get_student_profile(db, student_email)
     student_skills = _parse_skills(profile["skills"] if profile else None)
 
     rows = (
         db.query(Project, Company)
         .outerjoin(Company, Project.company_id == Company.id)
-        .filter(Project.catalog_visible.is_(True))
+        .filter(*catalog_visible_filter())
         .all()
     )
 
     scored: list[tuple[int, dict]] = []
     for proj, co in rows:
-        enrolled = active_enrollment_count(db, proj.id)
-        team_size = proj.team_size or 4
-        if enrolled >= team_size:
+        meta = catalog_teams_meta(db, proj)
+        if meta["teams_left"] <= 0:
             continue
 
         project_skills = _parse_skills(proj.competencies)
@@ -83,12 +79,12 @@ def recommend_projects(db: Session, *, student_email: str, limit: int = 10) -> l
         elif project_skills:
             skill_score = 10
 
-        seats_left = max(0, team_size - enrolled)
-        seat_bonus = min(15, seats_left * 3)
+        seats_left = meta["teams_left"]
+        seat_bonus = min(15, seats_left * 5)
         score = min(100, skill_score + seat_bonus)
 
         item = _project_dict(proj, co.name if co else None)
-        item.update(_catalog_meta(db, proj))
+        item.update(meta)
         item["match_score"] = score
         item["skill_overlap"] = overlap
         item["matched_skills"] = sorted(student_skills & project_skills)

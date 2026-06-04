@@ -15,6 +15,7 @@ from .projects.routes import router as projects_router
 from .companies.routes import router as companies_router
 from .competency.routes import router as competency_router
 from .cycles.routes import router as cycles_router
+from .teams.routes import router as teams_router
 from .security import require_curator, require_edagent, require_student
 from .student_data import purge_student_data
 from .services import (
@@ -27,6 +28,7 @@ from .services import (
 
 router = APIRouter(prefix="/api")
 router.include_router(cycles_router)
+router.include_router(teams_router)
 router.include_router(competency_router)
 router.include_router(companies_router)
 router.include_router(comms_router)

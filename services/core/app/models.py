@@ -3,7 +3,7 @@ from __future__ import annotations
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -376,9 +376,14 @@ class Project(Base):
     spec_markdown: Mapped[str | None] = mapped_column(Text, nullable=True)
     competencies: Mapped[str | None] = mapped_column(Text, nullable=True)
     team_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    max_teams: Mapped[int] = mapped_column(Integer, default=3)
     duration_weeks: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="draft")
     catalog_visible: Mapped[bool] = mapped_column(Boolean, default=False)
+    catalog_mode: Mapped[str] = mapped_column(String(32), default="permanent")
+    catalog_visible_until: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     approved_by: Mapped[str | None] = mapped_column(String(255), nullable=True)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -417,6 +422,7 @@ class ProjectEnrollment(Base):
     role_id: Mapped[int | None] = mapped_column(ForeignKey("project_roles.id"), nullable=True, index=True)
     student_email: Mapped[str] = mapped_column(String(255), index=True)
     student_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    team_id: Mapped[int | None] = mapped_column(ForeignKey("student_teams.id"), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), default="active")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -425,3 +431,53 @@ class ProjectEnrollment(Base):
 
     project: Mapped[Project] = relationship(back_populates="enrollments")
     role: Mapped[ProjectRole | None] = relationship(back_populates="enrollments")
+    team: Mapped["StudentTeam | None"] = relationship(back_populates="enrollments")
+
+
+class StudentTeam(Base):
+    __tablename__ = "student_teams"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    leader_email: Mapped[str] = mapped_column(String(255), index=True)
+    invite_code: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    max_members: Mapped[int] = mapped_column(Integer, default=5)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    members: Mapped[list["StudentTeamMember"]] = relationship(
+        back_populates="team", cascade="all, delete-orphan"
+    )
+    claims: Mapped[list["ProjectTeamClaim"]] = relationship(back_populates="team")
+    enrollments: Mapped[list[ProjectEnrollment]] = relationship(back_populates="team")
+
+
+class StudentTeamMember(Base):
+    __tablename__ = "student_team_members"
+    __table_args__ = (UniqueConstraint("team_id", "student_email", name="uq_student_team_members_team_email"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("student_teams.id", ondelete="CASCADE"), index=True)
+    student_email: Mapped[str] = mapped_column(String(255), index=True)
+    student_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_leader: Mapped[bool] = mapped_column(Boolean, default=False)
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    team: Mapped[StudentTeam] = relationship(back_populates="members")
+
+
+class ProjectTeamClaim(Base):
+    __tablename__ = "project_team_claims"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("student_teams.id", ondelete="CASCADE"), index=True)
+    leader_email: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    project: Mapped[Project] = relationship()
+    team: Mapped[StudentTeam] = relationship(back_populates="claims")

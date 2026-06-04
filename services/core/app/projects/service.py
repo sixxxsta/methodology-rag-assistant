@@ -15,9 +15,15 @@ from ..models import (
     Project,
     ProjectRole,
 )
-from ..cycles.service import get_phase_run, get_work_context
+from ..config import get_settings
 from ..services import log_action
-from ..services import log_action
+from .catalog import (
+    CATALOG_MODE_PERMANENT,
+    CATALOG_MODE_TEMPORARY,
+    catalog_visible_filter,
+    resolve_catalog_until,
+)
+from .limits import MAX_TEAM_MEMBERS, clamp_team_size, validate_catalog_publish_params
 from .generator import competencies_for_workspace, parse_tz_response, tz_prompt
 from .roles import list_project_roles, sync_roles_from_spec
 from .enrollment import (
@@ -27,6 +33,36 @@ from .enrollment import (
     list_my_enrollments,
     withdraw_enrollment,
 )
+from .team_claims import catalog_teams_meta, viewer_team_context
+
+
+def _project_publish_meta(p: Project) -> dict:
+    try:
+        validate_catalog_publish_params(p)
+        ready, reason = True, None
+    except ValueError as exc:
+        ready, reason = False, str(exc)
+
+    expiry_soon = None
+    mode = getattr(p, "catalog_mode", CATALOG_MODE_PERMANENT) or CATALOG_MODE_PERMANENT
+    if p.catalog_visible and mode == CATALOG_MODE_TEMPORARY and p.catalog_visible_until:
+        now = datetime.now(timezone.utc)
+        until = p.catalog_visible_until
+        if until.tzinfo is None:
+            until = until.replace(tzinfo=timezone.utc)
+        if until > now:
+            days_left = (until - now).days
+            if days_left <= get_settings().catalog_expiry_reminder_days_before:
+                expiry_soon = {
+                    "days_left": days_left,
+                    "until": until.isoformat(),
+                }
+
+    return {
+        "publish_ready": ready,
+        "publish_block_reason": reason,
+        "catalog_expiry_soon": expiry_soon,
+    }
 
 
 def _project_dict(p: Project, company_name: str | None = None) -> dict:
@@ -40,14 +76,20 @@ def _project_dict(p: Project, company_name: str | None = None) -> dict:
         "spec_markdown": p.spec_markdown,
         "competencies": p.competencies,
         "team_size": p.team_size,
+        "max_teams": getattr(p, "max_teams", None) or 3,
         "duration_weeks": p.duration_weeks,
         "status": p.status,
         "catalog_visible": p.catalog_visible,
+        "catalog_mode": getattr(p, "catalog_mode", CATALOG_MODE_PERMANENT) or CATALOG_MODE_PERMANENT,
+        "catalog_visible_until": (
+            p.catalog_visible_until.isoformat() if p.catalog_visible_until else None
+        ),
         "approved_by": p.approved_by,
         "approved_at": p.approved_at.isoformat() if p.approved_at else None,
         "published_at": p.published_at.isoformat() if p.published_at else None,
         "created_at": p.created_at.isoformat() if p.created_at else None,
         "updated_at": p.updated_at.isoformat() if p.updated_at else None,
+        **_project_publish_meta(p),
     }
 
 
@@ -174,7 +216,8 @@ def generate_project(
 
     project.spec_markdown = spec
     project.description = spec[:500] if spec else None
-    project.team_size = team_size or 4
+    project.team_size = clamp_team_size(team_size, default=4)
+    project.max_teams = 3
     project.duration_weeks = duration_weeks or 12
     project.competencies = comp_csv
     project.status = "draft"
@@ -209,6 +252,7 @@ def update_project(
     title: str | None = None,
     spec_markdown: str | None = None,
     team_size: int | None = None,
+    max_teams: int | None = None,
     duration_weeks: int | None = None,
     competencies: str | None = None,
 ) -> dict:
@@ -226,7 +270,11 @@ def update_project(
         project.spec_markdown = spec_markdown
         project.description = spec_markdown[:500]
     if team_size is not None:
-        project.team_size = team_size
+        project.team_size = clamp_team_size(team_size)
+    if max_teams is not None:
+        if max_teams < 1 or max_teams > 50:
+            raise ValueError("max_teams must be 1..50")
+        project.max_teams = max_teams
     if duration_weeks is not None:
         project.duration_weeks = duration_weeks
     if competencies is not None:
@@ -284,7 +332,15 @@ def approve_project(db: Session, project_id: int, *, actor_email: str) -> dict:
     return _project_dict(project, company_name)
 
 
-def publish_to_catalog(db: Session, project_id: int, *, actor_email: str) -> dict:
+def publish_to_catalog(
+    db: Session,
+    project_id: int,
+    *,
+    actor_email: str,
+    catalog_mode: str = CATALOG_MODE_PERMANENT,
+    catalog_months: int | None = None,
+    catalog_until: datetime | None = None,
+) -> dict:
     ctx = get_work_context(db)
     ws = ctx.workspace
     cid = ctx.cycle_id
@@ -296,13 +352,23 @@ def publish_to_catalog(db: Session, project_id: int, *, actor_email: str) -> dic
     if project.status != "approved":
         raise ValueError("approve project before publishing")
 
+    validate_catalog_publish_params(project)
+
+    project.catalog_mode = (catalog_mode or CATALOG_MODE_PERMANENT).strip().lower()
+    if project.catalog_mode not in (CATALOG_MODE_PERMANENT, CATALOG_MODE_TEMPORARY):
+        raise ValueError("catalog_mode must be permanent or temporary")
+    project.catalog_visible_until = resolve_catalog_until(
+        catalog_mode=project.catalog_mode,
+        catalog_months=catalog_months,
+        catalog_until=catalog_until,
+    )
     project.catalog_visible = True
     project.published_at = datetime.now(timezone.utc)
     sync_roles_from_spec(db, project)
 
     published_count = (
         db.query(Project)
-        .filter(Project.cycle_id == cid, Project.catalog_visible.is_(True))
+        .filter(Project.cycle_id == cid, *catalog_visible_filter())
         .count()
     )
 
@@ -334,13 +400,7 @@ def _matches_competencies(project: Project, filters: list[str]) -> bool:
 
 
 def _catalog_meta(db: Session, project: Project) -> dict:
-    team_size = project.team_size or 4
-    enrolled = active_enrollment_count(db, project.id)
-    return {
-        "enrollment_count": enrolled,
-        "seats_left": max(0, team_size - enrolled),
-        "team_size": team_size,
-    }
+    return catalog_teams_meta(db, project)
 
 
 def list_catalog(db: Session, *, competencies: list[str] | None = None) -> list[dict]:
@@ -351,7 +411,7 @@ def list_catalog(db: Session, *, competencies: list[str] | None = None) -> list[
         db.query(Project, Company, PartnershipCycle)
         .outerjoin(Company, Project.company_id == Company.id)
         .join(PartnershipCycle, Project.cycle_id == PartnershipCycle.id)
-        .filter(Project.catalog_visible.is_(True))
+        .filter(*catalog_visible_filter())
         .order_by(Project.published_at.desc())
         .all()
     )
@@ -371,36 +431,32 @@ def list_catalog(db: Session, *, competencies: list[str] | None = None) -> list[
 def get_catalog_project(
     db: Session, project_id: int, *, viewer_email: str | None = None
 ) -> dict:
-    ctx = get_work_context(db)
-    ws = ctx.workspace
-    cid = ctx.cycle_id
+    from ..models import PartnershipCycle
+
     row = (
-        db.query(Project, Company)
+        db.query(Project, Company, PartnershipCycle)
         .outerjoin(Company, Project.company_id == Company.id)
-        .filter(
-            Project.cycle_id == cid,
-            Project.id == project_id,
-            Project.catalog_visible.is_(True),
-        )
+        .join(PartnershipCycle, Project.cycle_id == PartnershipCycle.id)
+        .filter(Project.id == project_id, *catalog_visible_filter())
         .one()
     )
-    proj, co = row
+    proj, co, cycle = row
     data = _project_dict(proj, co.name if co else None)
+    data["cycle_id"] = cycle.id
+    data["cycle_name"] = cycle.name
     data.update(_catalog_meta(db, proj))
     data["roles"] = list_project_roles(db, proj.id)
+    data.update(viewer_team_context(db, project_id, viewer_email=viewer_email))
 
     if viewer_email:
-        enrollment = get_student_enrollment(db, proj.id, viewer_email.lower())
-        if enrollment and enrollment.status == "active":
-            role_title = None
-            if enrollment.role_id:
-                role = db.query(ProjectRole).filter(ProjectRole.id == enrollment.role_id).one_or_none()
-                role_title = role.title if role else None
+        claim = data.get("my_team_claim")
+        if claim and claim.get("project_id") == project_id and claim.get("status") == "active":
+            enrollment = get_student_enrollment(db, proj.id, viewer_email.lower())
             data["my_enrollment"] = {
-                "id": enrollment.id,
-                "role_id": enrollment.role_id,
-                "role_title": role_title,
-                "status": enrollment.status,
+                "id": enrollment.id if enrollment else None,
+                "team_id": claim.get("team_id"),
+                "status": "active",
+                "via_team": True,
             }
         else:
             data["my_enrollment"] = None
@@ -430,7 +486,7 @@ def complete_projects_phase(db: Session, *, actor_email: str) -> dict:
     cid = ctx.cycle_id
     published = (
         db.query(Project)
-        .filter(Project.cycle_id == cid, Project.catalog_visible.is_(True))
+        .filter(Project.cycle_id == cid, *catalog_visible_filter())
         .count()
     )
     if published < 1:

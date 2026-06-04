@@ -86,7 +86,15 @@ export default function CatalogPage() {
           </div>
 
           <p className="mb-4 text-sm text-muted">
-            Опубликованные проекты для студенческих команд программы ПроКомпетенции.
+            Опубликованные проекты для студенческих команд.{" "}
+            {student && (
+              <>
+                <Link href="/teams" className="text-accent hover:underline">
+                  Соберите команду
+                </Link>{" "}
+                — проект выбирает только лидер.
+              </>
+            )}
           </p>
 
           <form onSubmit={applyFilter} className="mb-6 flex flex-wrap gap-2">
@@ -243,19 +251,24 @@ export default function CatalogPage() {
                     <p className="mt-2 text-sm text-muted line-clamp-4">{item.description}</p>
                   )}
                   <div className="mt-3 flex flex-wrap gap-3 text-xs text-muted">
-                    {item.team_size != null && <span>Команда: {item.team_size}</span>}
+                    {item.team_member_size != null && (
+                      <span>До {Math.min(item.team_member_size, 5)} чел. в команде</span>
+                    )}
                     {item.duration_weeks != null && (
                       <span>Срок: {item.duration_weeks} нед.</span>
+                    )}
+                    {item.max_teams != null && (
+                      <span>
+                        Команд: {item.teams_claimed ?? 0}/{item.max_teams}
+                        {(item.teams_left ?? 0) > 0
+                          ? ` · свободно ${item.teams_left}`
+                          : " · занято"}
+                      </span>
                     )}
                   </div>
                   {item.competencies && (
                     <p className="mt-2 text-xs text-muted">
                       Компетенции: {item.competencies}
-                    </p>
-                  )}
-                  {item.seats_left != null && (
-                    <p className="mt-2 text-xs text-muted">
-                      Свободно мест: {item.seats_left}
                     </p>
                   )}
                   <p className="mt-3 text-xs text-accent">Открыть ТЗ →</p>

@@ -21,4 +21,12 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.process_email_outbox",
         "schedule": float(settings.email_outbox_interval_seconds),
     },
+    "expire-catalog-projects": {
+        "task": "app.tasks.expire_catalog_projects",
+        "schedule": float(settings.catalog_expire_interval_seconds),
+    },
+    "remind-catalog-expiring": {
+        "task": "app.tasks.remind_catalog_expiring",
+        "schedule": float(settings.catalog_reminder_interval_seconds),
+    },
 }

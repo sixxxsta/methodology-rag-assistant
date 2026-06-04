@@ -55,3 +55,25 @@ def process_email_outbox() -> dict:
         return process_outbox_batch(db)
     finally:
         db.close()
+
+
+@celery_app.task(name="app.tasks.expire_catalog_projects")
+def expire_catalog_projects() -> dict:
+    from .projects.catalog import expire_catalog_projects as run
+
+    db = SessionLocal()
+    try:
+        return run(db)
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.tasks.remind_catalog_expiring")
+def remind_catalog_expiring() -> dict:
+    from .projects.catalog import remind_catalog_expiring_projects as run
+
+    db = SessionLocal()
+    try:
+        return run(db)
+    finally:
+        db.close()

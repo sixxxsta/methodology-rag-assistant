@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..config import get_settings
 from ..models import Company, Competency, PartnerAgreement
+from .limits import clamp_team_size
 
 
 def _load_program_competencies() -> list[str]:
@@ -54,7 +55,7 @@ def tz_prompt(
 ## Контакты и менторство со стороны компании
 
 В конце отдельной строкой метаданные (без markdown):
-META: team_size=4; duration_weeks=12; competencies=Python, Agile, Git
+META: team_size=5; duration_weeks=12; competencies=Python, Agile, Git
 
 Не выдумывай контакты — укажи плейсхолдеры, если данных нет."""
 
@@ -72,7 +73,7 @@ def parse_tz_response(raw: str) -> tuple[str, str, int | None, int | None, str |
         re.MULTILINE | re.IGNORECASE,
     )
     if meta_match:
-        meta_team = int(meta_match.group(1))
+        meta_team = clamp_team_size(int(meta_match.group(1)), default=4)
         meta_weeks = int(meta_match.group(2))
         meta_comp = meta_match.group(3).strip()
         text = text[: meta_match.start()].strip()

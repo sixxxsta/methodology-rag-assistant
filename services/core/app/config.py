@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     email_queue_enabled: bool = False
     email_queue_max_attempts: int = 3
     email_outbox_interval_seconds: int = 60
+    catalog_expire_interval_seconds: int = 3600
+    catalog_expiry_reminder_days_before: int = 7
+    catalog_reminder_interval_seconds: int = 86400
 
 
 @lru_cache

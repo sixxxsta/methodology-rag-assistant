@@ -5,7 +5,7 @@ import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
 import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
-import { approveIndustry, activatePartnershipCycle, createPartnershipCycle, fetchCycles, fetchDashboard, reopenCyclePhase, resolveEscalation } from "@/lib/api";
+import { approveIndustry, activatePartnershipCycle, createPartnershipCycle, deletePartnershipCycle, fetchCycles, fetchDashboard, reopenCyclePhase, resolveEscalation } from "@/lib/api";
 import { canUseEdAgent, getUser, setCycleId } from "@/lib/auth";
 import type { DashboardData } from "@/lib/types";
 import clsx from "clsx";
@@ -43,6 +43,7 @@ export default function DashboardPage() {
   const [industry, setIndustry] = useState("");
   const [cycles, setCycles] = useState<Awaited<ReturnType<typeof fetchCycles>>["cycles"]>([]);
   const [newCycleName, setNewCycleName] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     setError("");
@@ -167,10 +168,42 @@ export default function DashboardPage() {
                 >
                   Новый цикл
                 </button>
+                {cycles.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={async () => {
+                      const activeId = data?.workspace.active_cycle?.id;
+                      if (!activeId) return;
+                      const name =
+                        cycles.find((c) => c.id === activeId)?.name ?? `цикл ${activeId}`;
+                      if (
+                        !window.confirm(
+                          `Удалить цикл «${name}»? Он исчезнет из списка; компании и проекты останутся в базе.`,
+                        )
+                      ) {
+                        return;
+                      }
+                      setBusy(true);
+                      try {
+                        await deletePartnershipCycle(activeId);
+                        await load();
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : "Ошибка");
+                      } finally {
+                        setBusy(false);
+                      }
+                    }}
+                    className="rounded-lg border border-red-500/40 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+                  >
+                    Удалить активный цикл
+                  </button>
+                )}
               </div>
               <p className="mt-3 text-xs text-muted">
-                Каждый цикл — свой набор компаний, писем и проектов. Фазы можно проходить повторно:
-                нажмите «Открыть снова» на завершённой фазе.
+                Каждый куратор видит только свои циклы (админ — все). Каждый цикл — свой набор компаний,
+                писем и проектов. Фазы можно проходить повторно: нажмите «Открыть снова» на завершённой
+                фазе.
               </p>
             </section>
           )}

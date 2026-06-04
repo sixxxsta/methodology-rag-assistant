@@ -5,6 +5,7 @@ import re
 from sqlalchemy.orm import Session
 
 from ..models import Project, ProjectEnrollment, ProjectRole
+from .limits import clamp_team_size
 
 
 def parse_roles_from_spec(spec: str) -> list[dict]:
@@ -90,7 +91,7 @@ def _role_dict(role: ProjectRole, enrolled: int = 0) -> dict:
 def sync_roles_from_spec(db: Session, project: Project) -> list[dict]:
     parsed = parse_roles_from_spec(project.spec_markdown or "")
     if not parsed:
-        team = project.team_size or 4
+        team = clamp_team_size(project.team_size, default=4)
         parsed = [
             {
                 "title": "Участник команды",

@@ -27,6 +27,8 @@ export default function ProjectsPage() {
   const [busy, setBusy] = useState(false);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [editSpec, setEditSpec] = useState("");
+  const [editTeamSize, setEditTeamSize] = useState(4);
+  const [editMaxTeams, setEditMaxTeams] = useState(3);
   const canEdit = canUseEdAgent(getUser());
 
   const load = useCallback(async () => {
@@ -161,18 +163,38 @@ export default function ProjectsPage() {
                               {proj.company_name} · {proj.status}
                               {proj.catalog_visible && " · в каталоге"}
                             </p>
-                            {(proj.team_size || proj.duration_weeks) && (
+                            {(proj.team_size || proj.max_teams || proj.duration_weeks) && (
                               <p className="mt-1 text-xs text-muted">
-                                Команда: {proj.team_size ?? "—"}, срок:{" "}
-                                {proj.duration_weeks ?? "—"} нед.
+                                В команде: до {Math.min(proj.team_size ?? 5, 5)} чел. · слотов
+                                команд: {proj.max_teams ?? 3} · срок: {proj.duration_weeks ?? "—"}{" "}
+                                нед.
                               </p>
                             )}
+                            {proj.catalog_visible && proj.catalog_expiry_soon && (
+                              <p className="mt-1 text-xs text-amber-400">
+                                Каталог: снимется через {proj.catalog_expiry_soon.days_left} дн. (
+                                {proj.catalog_expiry_soon.until.slice(0, 10)})
+                              </p>
+                            )}
+                            {proj.status === "approved" &&
+                              !proj.catalog_visible &&
+                              proj.publish_ready === false &&
+                              proj.publish_block_reason && (
+                                <p className="mt-1 text-xs text-amber-400">
+                                  {proj.publish_block_reason}
+                                </p>
+                              )}
                           </div>
                           <button
                             type="button"
                             onClick={() => {
-                              setExpanded(expanded === proj.id ? null : proj.id);
-                              setEditSpec(proj.spec_markdown || "");
+                              const open = expanded === proj.id ? null : proj.id;
+                              setExpanded(open);
+                              if (open === proj.id) {
+                                setEditSpec(proj.spec_markdown || "");
+                                setEditTeamSize(Math.min(proj.team_size ?? 4, 5));
+                                setEditMaxTeams(proj.max_teams ?? 3);
+                              }
                             }}
                             className="text-xs text-accent hover:underline"
                           >
@@ -182,6 +204,40 @@ export default function ProjectsPage() {
 
                         {expanded === proj.id && (
                           <div className="mt-4 space-y-3">
+                            {canEdit && (
+                              <div className="flex flex-wrap gap-4 rounded-lg border border-border/60 bg-surface p-3">
+                                <label className="text-xs text-muted">
+                                  Человек в команде (макс. 5)
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={5}
+                                    value={editTeamSize}
+                                    onChange={(e) =>
+                                      setEditTeamSize(
+                                        Math.min(5, Math.max(1, Number(e.target.value) || 1)),
+                                      )
+                                    }
+                                    className="mt-1 block w-20 rounded-lg border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                                  />
+                                </label>
+                                <label className="text-xs text-muted">
+                                  Сколько команд может взять проект
+                                  <input
+                                    type="number"
+                                    min={1}
+                                    max={50}
+                                    value={editMaxTeams}
+                                    onChange={(e) =>
+                                      setEditMaxTeams(
+                                        Math.min(50, Math.max(1, Number(e.target.value) || 1)),
+                                      )
+                                    }
+                                    className="mt-1 block w-20 rounded-lg border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
+                                  />
+                                </label>
+                              </div>
+                            )}
                             <textarea
                               value={editSpec}
                               onChange={(e) => setEditSpec(e.target.value)}
@@ -199,6 +255,8 @@ export default function ProjectsPage() {
                                     try {
                                       await updateProject(proj.id, {
                                         spec_markdown: editSpec,
+                                        team_size: editTeamSize,
+                                        max_teams: editMaxTeams,
                                       });
                                       await load();
                                     } finally {
@@ -207,7 +265,7 @@ export default function ProjectsPage() {
                                   }}
                                   className="rounded-lg border border-border px-3 py-1.5 text-xs"
                                 >
-                                  Сохранить правки
+                                  Сохранить ТЗ и параметры команд
                                 </button>
                                 <button
                                   type="button"
@@ -248,17 +306,34 @@ export default function ProjectsPage() {
                                 {proj.status === "approved" && !proj.catalog_visible && (
                                   <button
                                     type="button"
-                                    disabled={busy}
+                                    disabled={busy || proj.publish_ready === false}
+                                    title={
+                                      proj.publish_block_reason ||
+                                      "Сначала укажите размер команды и число слотов"
+                                    }
                                     onClick={async () => {
+                                      if (proj.publish_ready === false) {
+                                        setError(
+                                          proj.publish_block_reason ||
+                                            "Заполните параметры команд в ТЗ",
+                                        );
+                                        return;
+                                      }
+                                      const permanent = window.confirm(
+                                        "Как долго проект будет в каталоге для студентов?\n\nOK — постоянно (каждый семестр новые команды)\nОтмена — только текущий проход (~5 месяцев)",
+                                      );
+                                      const opts = permanent
+                                        ? { catalog_mode: "permanent" as const }
+                                        : { catalog_mode: "temporary" as const, catalog_months: 5 };
                                       setBusy(true);
                                       try {
-                                        await publishProject(proj.id);
+                                        await publishProject(proj.id, opts);
                                         await load();
                                       } finally {
                                         setBusy(false);
                                       }
                                     }}
-                                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs text-white"
+                                    className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
                                   >
                                     В каталог
                                   </button>

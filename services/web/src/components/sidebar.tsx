@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import Link from "next/link";
-import { LayoutDashboard, LogOut, MessageSquare, Settings, Sparkles } from "lucide-react";
+import { LayoutDashboard, LogOut, MessageSquare, Settings, Sparkles, Users } from "lucide-react";
 import { clearSession, getUser, isAdmin, canUseEdAgent, isStudent, roleLabel } from "@/lib/auth";
 import { deleteAccount } from "@/lib/api";
 import { useRouter } from "next/navigation";
@@ -128,6 +128,15 @@ export function Sidebar({ onNewChat, className }: Props) {
         >
           Каталог проектов
         </Link>
+        {student && (
+          <Link
+            href="/teams"
+            className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm transition hover:border-accent hover:bg-surface-2"
+          >
+            <Users className="h-4 w-4" />
+            Моя команда
+          </Link>
+        )}
         {onNewChat && (
           <button
             type="button"
