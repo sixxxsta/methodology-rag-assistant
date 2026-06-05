@@ -17,6 +17,7 @@ def record_outcome(
     db: Session,
     *,
     workspace_id: int,
+    cycle_id: int,
     company_id: int,
     outcome: str,
     actor_email: str,
@@ -27,6 +28,7 @@ def record_outcome(
 ) -> dict:
     row = CommunicationOutcome(
         workspace_id=workspace_id,
+        cycle_id=cycle_id,
         company_id=company_id,
         communication_id=communication_id,
         interaction_id=interaction_id,

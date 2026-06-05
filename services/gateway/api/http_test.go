@@ -46,7 +46,7 @@ func testServer(t *testing.T) (*HTTPServer, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	user, err := store.CreateUser("u@test.com", "secret12", auth.RoleStudent)
+	user, err := store.CreateUser("u@test.com", "secret12", auth.RoleStudent, "Тест Юзер")
 	if err != nil {
 		t.Fatal(err)
 	}

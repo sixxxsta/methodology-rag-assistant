@@ -4,9 +4,16 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
 import { Sidebar } from "@/components/sidebar";
-import { fetchMyEnrollments, fetchProjectCatalog, fetchProjectRecommendations, fetchStudentProfile, saveStudentProfile } from "@/lib/api";
-import { canUseEdAgent, getUser, isStudent } from "@/lib/auth";
-import { ArrowLeft, BookOpen, Search, Sparkles } from "lucide-react";
+import {
+  deleteCatalogProject,
+  fetchMyEnrollments,
+  fetchProjectCatalog,
+  fetchProjectRecommendations,
+  fetchStudentProfile,
+  saveStudentProfile,
+} from "@/lib/api";
+import { canUseEdAgent, getUser, isAdmin, isStudent } from "@/lib/auth";
+import { ArrowLeft, BookOpen, Search, Sparkles, Trash2 } from "lucide-react";
 
 export default function CatalogPage() {
   const [items, setItems] = useState<
@@ -25,8 +32,11 @@ export default function CatalogPage() {
   const [profileBusy, setProfileBusy] = useState(false);
   const [profileMsg, setProfileMsg] = useState("");
   const [error, setError] = useState("");
-  const student = isStudent(getUser());
+  const user = getUser();
+  const student = isStudent(user);
+  const moderation = isAdmin(user);
   const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setError("");
@@ -236,12 +246,45 @@ export default function CatalogPage() {
 
           <ul className="grid gap-4 sm:grid-cols-2">
             {items.map((item) => (
-              <li key={item.id}>
-                <Link
-                  href={`/catalog/${item.id}`}
-                  className="block rounded-2xl border border-border bg-surface-2 p-5 transition hover:border-accent/40"
-                >
-                  <h2 className="font-semibold leading-snug">{item.title}</h2>
+              <li
+                key={item.id}
+                className="rounded-2xl border border-border bg-surface-2 p-5 transition hover:border-accent/40"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <Link href={`/catalog/${item.id}`} className="min-w-0 flex-1">
+                    <h2 className="font-semibold leading-snug hover:text-accent">{item.title}</h2>
+                  </Link>
+                  {moderation && (
+                    <button
+                      type="button"
+                      title="Удалить из каталога"
+                      disabled={busyId === item.id}
+                      onClick={async () => {
+                        if (
+                          !window.confirm(
+                            `Удалить проект «${item.title}» из каталога? Это действие нельзя отменить.`,
+                          )
+                        ) {
+                          return;
+                        }
+                        setBusyId(item.id);
+                        setError("");
+                        try {
+                          await deleteCatalogProject(item.id);
+                          await load();
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : "Ошибка удаления");
+                        } finally {
+                          setBusyId(null);
+                        }
+                      }}
+                      className="shrink-0 rounded-lg border border-red-500/40 p-2 text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                <Link href={`/catalog/${item.id}`} className="block">
                   {item.company_name && (
                     <p className="mt-1 text-sm text-accent">{item.company_name}</p>
                   )}

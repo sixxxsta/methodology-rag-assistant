@@ -69,7 +69,7 @@ export function Sidebar({ onNewChat, className }: Props) {
 
       {user && (
         <div className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-muted">
-          <span className="text-text">{user.email}</span>
+          <span className="text-text">{user.fio?.trim() || user.email}</span>
           <span className="ml-2 rounded-md bg-accent/20 px-1.5 py-0.5 text-xs text-accent">
             {roleLabel(user.role)}
           </span>

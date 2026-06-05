@@ -20,6 +20,7 @@ from ..cycles.service import get_work_context, get_phase_run, unlock_next_phase
 from ..services import (
     create_escalation,
     log_action,
+    update_phase,
 )
 from ..config import get_settings
 from .generator import (

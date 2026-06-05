@@ -159,14 +159,22 @@ export default function TeamsPage() {
           )}
 
           {team && (
-            <section className="max-w-lg rounded-2xl border border-border bg-surface-2 p-5">
-              <h2 className="text-lg font-semibold">{team.name || "Команда"}</h2>
-              <p className="mt-1 text-sm text-muted">
-                Лидер: {team.leader_email}
-                {team.is_leader ? " (вы)" : ""}
-              </p>
-              <p className="mt-2 text-sm">
-                Участников: {team.member_count}/5
+            <section className="max-w-lg rounded-2xl border border-border bg-surface-2 p-6 shadow-sm">
+              <h2 className="text-xl font-bold text-text">{team.name || "Команда"}</h2>
+              <div className="mt-4 rounded-xl border border-accent/25 bg-accent/5 px-4 py-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted">Лидер</p>
+                <p className="mt-1 text-lg font-semibold text-text">
+                  {team.leader_fio || team.leader_email}
+                  {team.is_leader ? (
+                    <span className="ml-2 text-sm font-normal text-accent">(вы)</span>
+                  ) : null}
+                </p>
+              </div>
+              <p className="mt-4 text-base text-text">
+                Участников:{" "}
+                <span className="font-semibold">
+                  {team.member_count}/5
+                </span>
               </p>
               {team.is_leader && (
                 <div className="mt-3 flex items-center gap-2">
@@ -184,14 +192,28 @@ export default function TeamsPage() {
                 </div>
               )}
 
-              <ul className="mt-4 space-y-1 text-sm">
-                {team.members.map((m) => (
-                  <li key={m.student_email}>
-                    {m.student_email}
-                    {m.is_leader ? " · лидер" : ""}
-                  </li>
-                ))}
-              </ul>
+              <div className="mt-4">
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted">
+                  Участники
+                </p>
+                <ul className="space-y-2">
+                  {team.members.map((m) => (
+                    <li
+                      key={m.student_email}
+                      className="flex items-center justify-between rounded-xl border border-border bg-surface px-4 py-3"
+                    >
+                      <span className="text-base font-medium text-text">
+                        {m.fio || m.student_email}
+                      </span>
+                      {m.is_leader ? (
+                        <span className="rounded-full bg-accent/15 px-2.5 py-0.5 text-xs font-medium text-accent">
+                          лидер
+                        </span>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              </div>
 
               {team.is_leader && team.member_count > 1 && (
                 <div className="mt-4 border-t border-border pt-4">

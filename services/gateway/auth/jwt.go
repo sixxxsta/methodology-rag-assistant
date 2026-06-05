@@ -10,6 +10,7 @@ import (
 type Claims struct {
 	UserID int64  `json:"uid"`
 	Email  string `json:"email"`
+	Fio    string `json:"fio"`
 	Role   string `json:"role"`
 	jwt.RegisteredClaims
 }
@@ -33,6 +34,7 @@ func (t *TokenIssuer) Sign(user *User) (string, error) {
 	claims := Claims{
 		UserID: user.ID,
 		Email:  user.Email,
+		Fio:    user.Fio,
 		Role:   user.Role,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(time.Now().Add(t.ttl)),

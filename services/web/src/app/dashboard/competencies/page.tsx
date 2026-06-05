@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
 import { CompetencyMatrixChart } from "@/components/competency-matrix-chart";
+import { CycleBanner } from "@/components/cycle-banner";
 import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
 import {
@@ -15,6 +16,7 @@ import {
   seedProgramCompetencies,
 } from "@/lib/api";
 import { canUseEdAgent, getUser } from "@/lib/auth";
+import { useActiveCycleId } from "@/lib/use-cycle";
 import type { CompetencyMatrix, MatrixItem } from "@/lib/types";
 import clsx from "clsx";
 import { ArrowLeft, Download, Loader2, Search } from "lucide-react";
@@ -47,6 +49,7 @@ export default function CompetenciesPage() {
   const [collecting, setCollecting] = useState(false);
   const [info, setInfo] = useState("");
   const canEdit = canUseEdAgent(getUser());
+  const cycleId = useActiveCycleId();
 
   const load = useCallback(async () => {
     setError("");
@@ -71,8 +74,9 @@ export default function CompetenciesPage() {
   }, []);
 
   useEffect(() => {
+    setLoading(true);
     load();
-  }, [load]);
+  }, [load, cycleId]);
 
   async function onCollect() {
     if (!query.trim()) return;
@@ -98,6 +102,7 @@ export default function CompetenciesPage() {
       <div className="flex min-h-screen flex-col md:flex-row">
         <Sidebar className="md:sticky md:top-0 md:h-screen" />
         <main className="flex-1 p-6 md:p-10">
+          <CycleBanner />
           <div className="mb-6 flex flex-wrap items-center gap-3">
             <Link
               href="/dashboard"

@@ -7,6 +7,7 @@ import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
 import { approveIndustry, activatePartnershipCycle, createPartnershipCycle, deletePartnershipCycle, fetchCycles, fetchDashboard, reopenCyclePhase, resolveEscalation } from "@/lib/api";
 import { canUseEdAgent, getUser, setCycleId } from "@/lib/auth";
+import { useActiveCycleId } from "@/lib/use-cycle";
 import type { DashboardData } from "@/lib/types";
 import clsx from "clsx";
 import {
@@ -44,6 +45,7 @@ export default function DashboardPage() {
   const [cycles, setCycles] = useState<Awaited<ReturnType<typeof fetchCycles>>["cycles"]>([]);
   const [newCycleName, setNewCycleName] = useState("");
   const [busy, setBusy] = useState(false);
+  const cycleId = useActiveCycleId();
 
   const load = useCallback(async () => {
     setError("");
@@ -61,8 +63,9 @@ export default function DashboardPage() {
   }, []);
 
   useEffect(() => {
+    setLoading(true);
     load();
-  }, [load]);
+  }, [load, cycleId]);
 
   async function onApproveIndustry() {
     if (!industry.trim()) return;

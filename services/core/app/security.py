@@ -21,6 +21,7 @@ def require_internal(
     x_user_email: str | None = Header(default=None, alias="X-User-Email"),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
     x_user_role: str | None = Header(default=None, alias="X-User-Role"),
+    x_user_fio: str | None = Header(default=None, alias="X-User-Fio"),
 ) -> dict[str, str]:
     settings = get_settings()
     if settings.core_internal_secret:
@@ -36,6 +37,7 @@ def require_internal(
         "email": email,
         "user_id": (x_user_id or "").strip(),
         "role": role,
+        "fio": (x_user_fio or "").strip(),
     }
 
 
@@ -61,6 +63,14 @@ def require_curator(
     user: Annotated[dict[str, str], Depends(require_internal)],
 ) -> dict[str, str]:
     return _require_curator(user)
+
+
+def require_admin(
+    user: Annotated[dict[str, str], Depends(require_internal)],
+) -> dict[str, str]:
+    if user["role"] != "admin":
+        raise HTTPException(status_code=403, detail="admin required")
+    return user
 
 
 def require_student(

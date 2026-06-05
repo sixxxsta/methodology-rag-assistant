@@ -68,6 +68,7 @@ def ingest_from_outcome(db: Session, outcome_row: CommunicationOutcome) -> Strat
 
     row = StrategyPattern(
         workspace_id=outcome_row.workspace_id,
+        cycle_id=outcome_row.cycle_id,
         category=category,
         tone=tone,
         outcome=outcome_row.outcome,

@@ -5,9 +5,11 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from ..models import Project, ProjectEnrollment, ProjectTeamClaim, StudentTeam, StudentTeamMember
+from ..profiles.service import display_name
 from ..services import log_action
 from ..teams.service import TEAM_STATUS_ACTIVE, _active_team_for_student, _norm
 from .catalog import catalog_visible_filter
+from .interviews import interview_context, interview_passed
 from .limits import MIN_TEAM_MEMBERS_TO_CLAIM, clamp_team_size
 
 
@@ -68,6 +70,38 @@ def _claim_dict(claim: ProjectTeamClaim, project: Project | None = None) -> dict
     }
 
 
+def list_project_claims(db: Session, project_id: int) -> list[dict]:
+    rows = (
+        db.query(ProjectTeamClaim, StudentTeam)
+        .join(StudentTeam, ProjectTeamClaim.team_id == StudentTeam.id)
+        .filter(
+            ProjectTeamClaim.project_id == project_id,
+            ProjectTeamClaim.status == CLAIM_ACTIVE,
+        )
+        .order_by(ProjectTeamClaim.created_at.asc())
+        .all()
+    )
+    out: list[dict] = []
+    for claim, team in rows:
+        member_count = (
+            db.query(StudentTeamMember)
+            .filter(StudentTeamMember.team_id == team.id)
+            .count()
+        )
+        out.append(
+            {
+                "claim_id": claim.id,
+                "team_id": team.id,
+                "team_name": team.name or f"Команда #{team.id}",
+                "leader_email": claim.leader_email,
+                "leader_fio": display_name(db, claim.leader_email),
+                "member_count": member_count,
+                "claimed_at": claim.created_at.isoformat() if claim.created_at else None,
+            }
+        )
+    return out
+
+
 def catalog_teams_meta(db: Session, project: Project) -> dict:
     max_teams = project.max_teams or 1
     claimed = active_team_claims_count(db, project.id)
@@ -84,6 +118,15 @@ def catalog_teams_meta(db: Session, project: Project) -> dict:
 def viewer_team_context(
     db: Session, project_id: int, *, viewer_email: str | None
 ) -> dict:
+    empty_interview = {
+        "interview_required": False,
+        "interview_status": None,
+        "interview_questions": [],
+        "interview_feedback": None,
+        "can_start_interview": False,
+        "can_submit_interview": False,
+        "interview_passed": True,
+    }
     if not viewer_email:
         return {
             "my_team": None,
@@ -94,6 +137,7 @@ def viewer_team_context(
             "team_members_short": MIN_TEAM_MEMBERS_TO_CLAIM,
             "semester_claim_blocked": False,
             "semester_claim_block_reason": None,
+            **empty_interview,
         }
 
     email = _norm(viewer_email)
@@ -108,6 +152,7 @@ def viewer_team_context(
             "team_members_short": MIN_TEAM_MEMBERS_TO_CLAIM,
             "semester_claim_blocked": False,
             "semester_claim_block_reason": None,
+            **empty_interview,
         }
 
     from ..teams.service import _team_dict
@@ -141,6 +186,10 @@ def viewer_team_context(
                 "Раз в семестр доступен только один проект."
             )
 
+    interview_ok = True
+    if project and getattr(project, "interview_required", False):
+        interview_ok = interview_passed(db, project.id, team.id)
+
     can_claim = bool(
         is_leader
         and claim is None
@@ -148,7 +197,16 @@ def viewer_team_context(
         and teams_left > 0
         and project is not None
         and member_count >= min_required
+        and interview_ok
     )
+
+    iv_ctx = interview_context(
+        db,
+        project,
+        viewer_email=email,
+        is_leader=is_leader,
+        team_id=team.id,
+    ) if project else empty_interview
 
     return {
         "my_team": _team_dict(db, team, viewer_email=email),
@@ -159,6 +217,7 @@ def viewer_team_context(
         "team_members_short": max(0, min_required - member_count),
         "semester_claim_blocked": semester_blocked,
         "semester_claim_block_reason": semester_block_reason,
+        **iv_ctx,
     }
 
 
@@ -212,6 +271,9 @@ def claim_project_for_team(
         raise ValueError(
             f"в команде {member_count} чел.; для выбора проекта нужно минимум {MIN_TEAM_MEMBERS_TO_CLAIM}"
         )
+
+    if getattr(project, "interview_required", False) and not interview_passed(db, project.id, team.id):
+        raise ValueError("сначала пройдите собеседование по этому проекту")
 
     claim = ProjectTeamClaim(
         project_id=project.id,

@@ -377,6 +377,7 @@ class Project(Base):
     competencies: Mapped[str | None] = mapped_column(Text, nullable=True)
     team_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
     max_teams: Mapped[int] = mapped_column(Integer, default=3)
+    interview_required: Mapped[bool] = mapped_column(Boolean, default=False)
     duration_weeks: Mapped[int | None] = mapped_column(Integer, nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="draft")
     catalog_visible: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -481,3 +482,40 @@ class ProjectTeamClaim(Base):
 
     project: Mapped[Project] = relationship()
     team: Mapped[StudentTeam] = relationship(back_populates="claims")
+
+
+class UserProfile(Base):
+    __tablename__ = "user_profiles"
+
+    email: Mapped[str] = mapped_column(String(255), primary_key=True)
+    fio: Mapped[str] = mapped_column(String(255))
+    role: Mapped[str] = mapped_column(String(32), default="student")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ProjectTeamInterview(Base):
+    __tablename__ = "project_team_interviews"
+    __table_args__ = (
+        UniqueConstraint("project_id", "team_id", name="uq_project_team_interviews_project_team"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    project_id: Mapped[int] = mapped_column(ForeignKey("projects.id", ondelete="CASCADE"), index=True)
+    team_id: Mapped[int] = mapped_column(ForeignKey("student_teams.id", ondelete="CASCADE"), index=True)
+    leader_email: Mapped[str] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    score: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    questions_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    answers_json: Mapped[str | None] = mapped_column(Text, nullable=True)
+    feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    curator_email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    curator_feedback: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    passed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    project: Mapped[Project] = relationship()
+    team: Mapped[StudentTeam] = relationship()

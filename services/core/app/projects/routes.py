@@ -3,15 +3,16 @@ from __future__ import annotations
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..security import require_curator, require_edagent, require_internal, require_student
+from ..security import require_admin, require_curator, require_edagent, require_internal, require_student
 from .service import (
     approve_project,
     complete_projects_phase,
     dashboard,
+    delete_project,
     generate_project,
     get_catalog_project,
     get_project,
@@ -23,6 +24,13 @@ from .service import (
 from .catalog import extend_catalog_visibility
 from .matching import get_student_profile, recommend_projects, upsert_student_profile
 from .enrollment import enroll_student, list_my_enrollments, withdraw_enrollment
+from .interviews import (
+    approve_team_interview,
+    list_pending_interviews,
+    reject_team_interview,
+    start_team_interview,
+    submit_team_interview,
+)
 from .team_claims import claim_project_for_team, withdraw_team_claim
 from .roles import list_project_roles
 
@@ -38,8 +46,17 @@ class UpdateIn(BaseModel):
     spec_markdown: str | None = None
     team_size: int | None = Field(default=None, ge=1, le=5)
     max_teams: int | None = Field(default=None, ge=1, le=50)
+    interview_required: bool | None = None
     duration_weeks: int | None = None
     competencies: str | None = None
+
+
+class InterviewSubmitIn(BaseModel):
+    answers: list[str] = Field(min_length=1)
+
+
+class InterviewReviewIn(BaseModel):
+    feedback: str | None = None
 
 
 class EnrollIn(BaseModel):
@@ -84,12 +101,63 @@ def student_profile_put(
     return {"profile": profile}
 
 
+@router.get("/interviews/pending")
+def pending_interviews(
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
+):
+    from ..cycles.service import get_work_context
+
+    ctx = get_work_context(db)
+    return {"items": list_pending_interviews(db, ctx.cycle_id)}
+
+
+@router.post("/interviews/{interview_id}/approve")
+def interview_approve(
+    interview_id: int,
+    body: InterviewReviewIn,
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
+):
+    try:
+        return approve_team_interview(
+            db,
+            interview_id,
+            actor_email=user["email"],
+            feedback=body.feedback,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/interviews/{interview_id}/reject")
+def interview_reject(
+    interview_id: int,
+    body: InterviewReviewIn,
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
+):
+    try:
+        return reject_team_interview(
+            db,
+            interview_id,
+            actor_email=user["email"],
+            feedback=body.feedback or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.get("/dashboard")
 def projects_dashboard(
     db: Session = Depends(get_db),
     user: Annotated[dict[str, str], Depends(require_edagent)] = None,
 ):
-    return dashboard(db)
+    return dashboard(
+        db,
+        actor_email=user["email"],
+        actor_role=user.get("role", ""),
+    )
 
 
 @router.get("/my-enrollments")
@@ -118,6 +186,60 @@ def catalog_project(
 ):
     try:
         return get_catalog_project(db, project_id, viewer_email=user["email"])
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.delete("/catalog/{project_id}")
+def catalog_remove_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_admin)] = None,
+):
+    try:
+        return delete_project(
+            db,
+            project_id,
+            actor_email=user["email"],
+            actor_role=user.get("role", ""),
+            from_catalog=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/catalog/{project_id}/interview/start")
+def catalog_interview_start(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_student)] = None,
+):
+    try:
+        return start_team_interview(db, project_id, leader_email=user["email"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/catalog/{project_id}/interview/submit")
+def catalog_interview_submit(
+    project_id: int,
+    body: InterviewSubmitIn,
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_student)] = None,
+):
+    try:
+        return submit_team_interview(
+            db,
+            project_id,
+            leader_email=user["email"],
+            answers=body.answers,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -242,6 +364,25 @@ def generate(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.delete("/{project_id}")
+def remove_project(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
+):
+    try:
+        return delete_project(
+            db,
+            project_id,
+            actor_email=user["email"],
+            actor_role=user.get("role", ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.patch("/{project_id}")
 def patch_project(
     project_id: int,
@@ -258,6 +399,7 @@ def patch_project(
             spec_markdown=body.spec_markdown,
             team_size=body.team_size,
             max_teams=body.max_teams,
+            interview_required=body.interview_required,
             duration_weeks=body.duration_weeks,
             competencies=body.competencies,
         )

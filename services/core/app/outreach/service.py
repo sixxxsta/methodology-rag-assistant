@@ -408,6 +408,7 @@ def record_inbound(
         record_outcome(
             db,
             workspace_id=ws.id,
+            cycle_id=cid,
             company_id=company.id,
             outcome="fail",
             actor_email=actor_email,
@@ -506,6 +507,7 @@ def record_agreement(
     record_outcome(
         db,
         workspace_id=ws.id,
+        cycle_id=cid,
         company_id=company.id,
         outcome="success",
         actor_email=actor_email,

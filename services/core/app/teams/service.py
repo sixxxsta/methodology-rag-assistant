@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from ..models import StudentTeam, StudentTeamMember
+from ..profiles.service import display_names
 from ..projects.limits import MAX_TEAM_MEMBERS
 from ..services import log_action
 
@@ -55,10 +56,13 @@ def _team_dict(db: Session, team: StudentTeam, *, viewer_email: str) -> dict:
         .all()
     )
     email = _norm(viewer_email)
+    member_emails = [m.student_email for m in members]
+    member_names = display_names(db, member_emails + [team.leader_email])
     return {
         "id": team.id,
         "name": team.name,
         "leader_email": team.leader_email,
+        "leader_fio": member_names.get(_norm(team.leader_email), team.leader_email),
         "invite_code": team.invite_code,
         "max_members": team.max_members,
         "member_count": len(members),
@@ -67,6 +71,7 @@ def _team_dict(db: Session, team: StudentTeam, *, viewer_email: str) -> dict:
         "members": [
             {
                 "student_email": m.student_email,
+                "fio": member_names.get(_norm(m.student_email), m.student_email),
                 "is_leader": m.is_leader,
                 "joined_at": m.joined_at.isoformat() if m.joined_at else None,
             }

@@ -2,11 +2,14 @@ from __future__ import annotations
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from .config import get_settings
 from .database import get_db
+from .profiles.service import upsert_profile
 from .schemas import DashboardOut, EscalationResolveIn, IndustryApproveIn, PhaseUpdateIn
 from .comms.routes import router as comms_router
 from .memory.routes import router as memory_router
@@ -117,3 +120,22 @@ def student_purge_data(
     user: Annotated[dict[str, str], Depends(require_student)] = None,
 ):
     return purge_student_data(db, student_email=user["email"])
+
+
+class UserProfileIn(BaseModel):
+    email: str
+    fio: str = Field(min_length=2, max_length=255)
+    role: str = "student"
+
+
+@router.put("/internal/user-profile")
+def internal_user_profile(
+    body: UserProfileIn,
+    db: Session = Depends(get_db),
+    x_core_internal_key: str | None = Header(default=None, alias="X-Core-Internal-Key"),
+):
+    settings = get_settings()
+    if settings.core_internal_secret and x_core_internal_key != settings.core_internal_secret:
+        raise HTTPException(status_code=401, detail="invalid internal key")
+    row = upsert_profile(db, email=body.email, fio=body.fio, role=body.role)
+    return {"email": row.email, "fio": row.fio, "role": row.role}

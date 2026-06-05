@@ -61,11 +61,11 @@ export async function login(email: string, password: string) {
   return handleResponse<{ token: string; user: User }>(res, { redirectOn401: false });
 }
 
-export async function register(email: string, password: string) {
+export async function register(email: string, password: string, fio: string) {
   const res = await fetch("/api/auth/register", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, fio }),
   });
   return handleResponse<{ token: string; user: User }>(res, { redirectOn401: false });
 }
@@ -137,6 +137,7 @@ export async function ingestKnowledge(): Promise<IngestResult> {
 export async function createStaffUser(payload: {
   email: string;
   password: string;
+  fio: string;
   role: "curator" | "admin";
 }) {
   const res = await fetch("/api/admin/users", {
@@ -578,15 +579,38 @@ export async function fetchProjectsDashboard() {
       catalog_visible: boolean;
       team_size?: number | null;
       max_teams?: number;
+      interview_required?: boolean;
       duration_weeks?: number | null;
       competencies?: string | null;
+      claimed_teams?: ClaimedTeam[];
+      approved_by_fio?: string | null;
       publish_ready?: boolean;
       publish_block_reason?: string | null;
       catalog_expiry_soon?: { days_left: number; until: string } | null;
       can_extend_catalog?: boolean;
       catalog_mode?: string;
+      can_delete?: boolean;
     }>;
+    pending_interviews: PendingInterview[];
   }>(res);
+}
+
+export async function approveProjectInterview(interviewId: number, feedback?: string) {
+  const res = await fetch(`/api/ed/projects/interviews/${interviewId}/approve`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ feedback: feedback ?? null }),
+  });
+  return handleResponse(res);
+}
+
+export async function rejectProjectInterview(interviewId: number, feedback: string) {
+  const res = await fetch(`/api/ed/projects/interviews/${interviewId}/reject`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ feedback }),
+  });
+  return handleResponse(res);
 }
 
 export async function fetchProjectCatalog(competencies?: string) {
@@ -609,9 +633,34 @@ export async function fetchProjectCatalog(competencies?: string) {
       teams_claimed?: number;
       teams_left?: number;
       team_member_size?: number | null;
+      interview_required?: boolean;
     }>;
   }>(res);
 }
+
+export type ClaimedTeam = {
+  claim_id: number;
+  team_id: number;
+  team_name: string;
+  leader_email: string;
+  leader_fio?: string | null;
+  member_count: number;
+  claimed_at?: string | null;
+};
+
+export type PendingInterview = {
+  id: number;
+  project_id: number;
+  project_title: string;
+  team_name: string;
+  leader_email: string;
+  leader_fio?: string | null;
+  status: string;
+  score?: number | null;
+  questions: string[];
+  answers: string[];
+  submitted_at?: string | null;
+};
 
 export type CatalogProjectRole = {
   id: number;
@@ -627,12 +676,13 @@ export type StudentTeam = {
   id: number;
   name: string | null;
   leader_email: string;
+  leader_fio?: string | null;
   invite_code: string;
   max_members: number;
   member_count: number;
   status: string;
   is_leader: boolean;
-  members: Array<{ student_email: string; is_leader: boolean; joined_at?: string | null }>;
+  members: Array<{ student_email: string; fio?: string | null; is_leader: boolean; joined_at?: string | null }>;
 };
 
 export async function fetchMyTeam() {
@@ -683,6 +733,29 @@ export async function claimProjectForTeam(projectId: number) {
   return handleResponse<{ id: number; project_id: number; team_id: number; status: string }>(res);
 }
 
+export async function startProjectInterview(projectId: number) {
+  const res = await fetch(`/api/ed/projects/catalog/${projectId}/interview/start`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return handleResponse<{ status: string; questions: string[] }>(res);
+}
+
+export async function submitProjectInterview(projectId: number, answers: string[]) {
+  const res = await fetch(`/api/ed/projects/catalog/${projectId}/interview/submit`, {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ answers }),
+  });
+  return handleResponse<{
+    status: string;
+    score: number;
+    passed: boolean;
+    awaiting_curator?: boolean;
+    feedback: string;
+  }>(res);
+}
+
 export async function withdrawTeamProjectClaim(projectId: number) {
   const res = await fetch(`/api/ed/projects/catalog/${projectId}/claim`, {
     method: "DELETE",
@@ -714,6 +787,15 @@ export type CatalogProjectDetail = {
   my_team_claim?: { project_id: number; project_title?: string | null; team_id: number; status: string } | null;
   semester_claim_blocked?: boolean;
   semester_claim_block_reason?: string | null;
+  interview_required?: boolean;
+  interview_status?: string | null;
+  interview_questions?: string[];
+  interview_feedback?: string | null;
+  interview_passed?: boolean;
+  awaiting_curator_review?: boolean;
+  can_start_interview?: boolean;
+  can_submit_interview?: boolean;
+  claimed_teams?: ClaimedTeam[];
   my_enrollment?: {
     id: number | null;
     team_id?: number;
@@ -812,6 +894,7 @@ export async function updateProject(
     spec_markdown?: string;
     team_size?: number;
     max_teams?: number;
+    interview_required?: boolean;
     duration_weeks?: number;
     competencies?: string;
   },
@@ -830,6 +913,22 @@ export async function approveProject(projectId: number) {
     headers: authHeaders(),
   });
   return handleResponse(res);
+}
+
+export async function deleteProject(projectId: number) {
+  const res = await fetch(`/api/ed/projects/${projectId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  return handleResponse<{ status: string; project_id: number }>(res);
+}
+
+export async function deleteCatalogProject(projectId: number) {
+  const res = await fetch(`/api/ed/projects/catalog/${projectId}`, {
+    method: "DELETE",
+    headers: authHeaders(),
+  });
+  return handleResponse<{ status: string; project_id: number }>(res);
 }
 
 export async function publishProject(

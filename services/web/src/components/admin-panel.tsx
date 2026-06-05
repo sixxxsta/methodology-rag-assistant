@@ -20,6 +20,7 @@ export function AdminPanel() {
   const [loading, setLoading] = useState(false);
   const [ingesting, setIngesting] = useState(false);
   const [staffEmail, setStaffEmail] = useState("");
+  const [staffFio, setStaffFio] = useState("");
   const [staffPassword, setStaffPassword] = useState("");
   const [staffRole, setStaffRole] = useState<"curator" | "admin">("curator");
   const [staffBusy, setStaffBusy] = useState(false);
@@ -87,11 +88,13 @@ export function AdminPanel() {
     try {
       const res = await createStaffUser({
         email: staffEmail.trim(),
+        fio: staffFio.trim(),
         password: staffPassword,
         role: staffRole,
       });
-      pushLog(`Создан аккаунт ${res.user.email} (${staffRole})`);
+      pushLog(`Создан аккаунт ${res.user.fio || res.user.email} (${staffRole})`);
       setStaffEmail("");
+      setStaffFio("");
       setStaffPassword("");
     } catch (err) {
       pushLog(err instanceof Error ? err.message : "Ошибка создания аккаунта");
@@ -125,6 +128,17 @@ export function AdminPanel() {
               Ученики регистрируются сами. Кураторов и модераторов создаёт только модерация.
             </p>
             <form onSubmit={onCreateStaff} className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className="block text-sm text-muted sm:col-span-2">
+                ФИО
+                <input
+                  type="text"
+                  required
+                  minLength={2}
+                  value={staffFio}
+                  onChange={(e) => setStaffFio(e.target.value)}
+                  className="mt-1 w-full rounded-xl border border-border bg-surface px-3 py-2 text-text outline-none focus:border-accent"
+                />
+              </label>
               <label className="block text-sm text-muted sm:col-span-2">
                 Email
                 <input

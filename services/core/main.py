@@ -39,17 +39,15 @@ app.add_middleware(
 def startup() -> None:
     validate_settings(get_settings())
     init_db()
-    from app.database import SessionLocal
     from app.competency.service import seed_program_competencies
-    from app.services import ensure_workspace
+    from app.cycles.service import ensure_default_cycle, ensure_workspace
+    from app.database import SessionLocal
 
     db = SessionLocal()
     try:
-        from .cycles.service import ensure_default_cycle, ensure_workspace
-        from .competency.service import seed_program_competencies
-
+        bootstrap_user = {"email": "admin@example.com", "role": "admin"}
         ws = ensure_workspace(db)
-        cycle = ensure_default_cycle(db, ws)
+        cycle = ensure_default_cycle(db, ws, bootstrap_user)
         seed_program_competencies(db, ws.id, cycle_id=cycle.id)
     finally:
         db.close()

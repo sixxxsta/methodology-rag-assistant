@@ -31,14 +31,25 @@ class CorrelationIdMiddleware(BaseHTTPMiddleware):
 
         email = (request.headers.get("X-User-Email") or "").strip().lower()
         role = normalize_role(request.headers.get("X-User-Role") or "")
+        fio = (request.headers.get("X-User-Fio") or "").strip()
         if email:
             user_token = set_request_user(
                 {
                     "email": email,
                     "role": role,
                     "user_id": (request.headers.get("X-User-Id") or "").strip(),
+                    "fio": fio,
                 }
             )
+            if fio:
+                try:
+                    from .database import SessionLocal
+                    from .profiles.service import upsert_profile
+
+                    with SessionLocal() as db:
+                        upsert_profile(db, email=email, fio=fio, role=role)
+                except Exception:
+                    logger.exception("profile sync failed for %s", email)
 
         try:
             response = await call_next(request)

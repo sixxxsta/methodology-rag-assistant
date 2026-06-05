@@ -1,6 +1,7 @@
 export type User = {
   id: number;
   email: string;
+  fio?: string;
   role: "admin" | "curator" | "student";
   created_at: string;
 };

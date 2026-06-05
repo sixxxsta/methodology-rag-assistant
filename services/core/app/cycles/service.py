@@ -215,7 +215,13 @@ def get_work_context(db: Session, cycle_id: int | None = None) -> WorkContext:
     return WorkContext(workspace=ws, cycle=cycle)
 
 
-def _cycle_dict(cycle: PartnershipCycle, *, project_count: int = 0, company_count: int = 0) -> dict:
+def _cycle_dict(
+    cycle: PartnershipCycle,
+    *,
+    project_count: int = 0,
+    company_count: int = 0,
+    created_by_fio: str | None = None,
+) -> dict:
     return {
         "id": cycle.id,
         "workspace_id": cycle.workspace_id,
@@ -223,6 +229,7 @@ def _cycle_dict(cycle: PartnershipCycle, *, project_count: int = 0, company_coun
         "industry": cycle.industry,
         "status": cycle.status,
         "created_by": cycle.created_by,
+        "created_by_fio": created_by_fio or cycle.created_by,
         "created_at": cycle.created_at.isoformat() if cycle.created_at else None,
         "project_count": project_count,
         "company_count": company_count,
@@ -232,6 +239,8 @@ def _cycle_dict(cycle: PartnershipCycle, *, project_count: int = 0, company_coun
 
 
 def list_cycles(db: Session, *, actor_email: str, actor_role: str) -> list[dict]:
+    from ..profiles.service import display_name
+
     user = {"email": actor_email, "role": actor_role}
     ws = ensure_workspace(db)
     rows = _cycles_query(db, ws.id, user).order_by(PartnershipCycle.id.desc()).all()
@@ -240,7 +249,12 @@ def list_cycles(db: Session, *, actor_email: str, actor_role: str) -> list[dict]
     for cycle in rows:
         pc = db.query(Project).filter(Project.cycle_id == cycle.id).count()
         cc = db.query(Company).filter(Company.cycle_id == cycle.id).count()
-        item = _cycle_dict(cycle, project_count=pc, company_count=cc)
+        item = _cycle_dict(
+            cycle,
+            project_count=pc,
+            company_count=cc,
+            created_by_fio=display_name(db, cycle.created_by),
+        )
         item["is_owner"] = _is_admin(user) or _norm_email(cycle.created_by) == email
         out.append(item)
     return out

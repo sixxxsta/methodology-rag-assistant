@@ -3,19 +3,24 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { CycleBanner } from "@/components/cycle-banner";
 import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
 import {
   approveProject,
+  approveProjectInterview,
   completeProjectsPhase,
+  deleteProject,
   extendCatalogProject,
   fetchProjectsDashboard,
+  rejectProjectInterview,
   generateProjectTz,
   publishProject,
   syncProjectRoles,
   updateProject,
 } from "@/lib/api";
 import { canUseEdAgent, getUser } from "@/lib/auth";
+import { useActiveCycleId } from "@/lib/use-cycle";
 import clsx from "clsx";
 import { ArrowLeft, BookOpen, FileText, Loader2 } from "lucide-react";
 
@@ -30,7 +35,9 @@ export default function ProjectsPage() {
   const [editSpec, setEditSpec] = useState("");
   const [editTeamSize, setEditTeamSize] = useState(4);
   const [editMaxTeams, setEditMaxTeams] = useState(3);
+  const [editInterviewRequired, setEditInterviewRequired] = useState(false);
   const canEdit = canUseEdAgent(getUser());
+  const cycleId = useActiveCycleId();
 
   const load = useCallback(async () => {
     setError("");
@@ -44,8 +51,9 @@ export default function ProjectsPage() {
   }, []);
 
   useEffect(() => {
+    setLoading(true);
     load();
-  }, [load]);
+  }, [load, cycleId]);
 
   async function onGenerate(companyId: number, agreementId: number) {
     setBusy(true);
@@ -67,6 +75,7 @@ export default function ProjectsPage() {
       <div className="flex min-h-screen flex-col md:flex-row">
         <Sidebar className="md:sticky md:top-0 md:h-screen" />
         <main className="flex-1 p-6 md:p-10">
+          <CycleBanner />
           <div className="mb-6 flex flex-wrap items-center gap-3">
             <Link
               href="/dashboard"
@@ -101,6 +110,72 @@ export default function ProjectsPage() {
                 <p className="mb-6 rounded-lg border border-border bg-surface-2 px-4 py-3 text-sm text-muted">
                   Нет соглашений с партнёрами. Зафиксируйте соглашение в фазе Outreach.
                 </p>
+              )}
+
+              {(data.pending_interviews?.length ?? 0) > 0 && (
+                <section className="mb-8 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
+                  <h2 className="mb-3 font-semibold">Собеседования на проверке</h2>
+                  <ul className="space-y-4">
+                    {data.pending_interviews.map((iv) => (
+                      <li key={iv.id} className="rounded-lg border border-border/60 bg-surface p-4 text-sm">
+                        <p className="font-medium">
+                          {iv.project_title} — {iv.team_name}
+                        </p>
+                        <p className="text-xs text-muted">
+                          Лидер: {iv.leader_fio || iv.leader_email}
+                        </p>
+                        <div className="mt-3 space-y-2">
+                          {iv.questions.map((q, i) => (
+                            <div key={i}>
+                              <p className="text-xs text-muted">{i + 1}. {q}</p>
+                              <p className="rounded border border-border/50 px-2 py-1 text-xs">
+                                {iv.answers[i] || "—"}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                        {canEdit && (
+                          <div className="mt-3 flex flex-wrap gap-2">
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={async () => {
+                                setBusy(true);
+                                try {
+                                  await approveProjectInterview(iv.id);
+                                  await load();
+                                } finally {
+                                  setBusy(false);
+                                }
+                              }}
+                              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
+                            >
+                              Одобрить команду
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busy}
+                              onClick={async () => {
+                                const reason = window.prompt("Комментарий для команды:");
+                                if (!reason?.trim()) return;
+                                setBusy(true);
+                                try {
+                                  await rejectProjectInterview(iv.id, reason.trim());
+                                  await load();
+                                } finally {
+                                  setBusy(false);
+                                }
+                              }}
+                              className="rounded-lg border border-red-500/40 px-3 py-1.5 text-xs text-red-400 disabled:opacity-50"
+                            >
+                              Отклонить
+                            </button>
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
               )}
 
               <section className="mb-8">
@@ -163,12 +238,22 @@ export default function ProjectsPage() {
                             <p className="text-xs text-muted">
                               {proj.company_name} · {proj.status}
                               {proj.catalog_visible && " · в каталоге"}
+                              {proj.approved_by_fio && ` · куратор: ${proj.approved_by_fio}`}
                             </p>
                             {(proj.team_size || proj.max_teams || proj.duration_weeks) && (
                               <p className="mt-1 text-xs text-muted">
                                 В команде: до {Math.min(proj.team_size ?? 5, 5)} чел. · слотов
                                 команд: {proj.max_teams ?? 3} · срок: {proj.duration_weeks ?? "—"}{" "}
                                 нед.
+                                {proj.interview_required && " · собеседование обязательно"}
+                              </p>
+                            )}
+                            {(proj.claimed_teams?.length ?? 0) > 0 && (
+                              <p className="mt-2 text-xs text-muted">
+                                Выбрали:{" "}
+                                {proj.claimed_teams!
+                                  .map((t) => `${t.team_name} (${t.leader_fio || t.leader_email})`)
+                                  .join(", ")}
                               </p>
                             )}
                             {proj.catalog_visible && proj.catalog_expiry_soon && (
@@ -195,6 +280,7 @@ export default function ProjectsPage() {
                                 setEditSpec(proj.spec_markdown || "");
                                 setEditTeamSize(Math.min(proj.team_size ?? 4, 5));
                                 setEditMaxTeams(proj.max_teams ?? 3);
+                                setEditInterviewRequired(proj.interview_required ?? false);
                               }
                             }}
                             className="text-xs text-accent hover:underline"
@@ -237,6 +323,15 @@ export default function ProjectsPage() {
                                     className="mt-1 block w-20 rounded-lg border border-border bg-surface-2 px-2 py-1.5 text-sm text-text"
                                   />
                                 </label>
+                                <label className="flex items-center gap-2 text-xs text-muted">
+                                  <input
+                                    type="checkbox"
+                                    checked={editInterviewRequired}
+                                    onChange={(e) => setEditInterviewRequired(e.target.checked)}
+                                    className="rounded border-border"
+                                  />
+                                  Только после собеседования
+                                </label>
                               </div>
                             )}
                             <textarea
@@ -258,6 +353,7 @@ export default function ProjectsPage() {
                                         spec_markdown: editSpec,
                                         team_size: editTeamSize,
                                         max_teams: editMaxTeams,
+                                        interview_required: editInterviewRequired,
                                       });
                                       await load();
                                     } finally {
@@ -375,6 +471,35 @@ export default function ProjectsPage() {
                                       Продлить в каталоге
                                     </button>
                                   )}
+                                {canEdit && proj.can_delete && (
+                                  <button
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={async () => {
+                                      if (
+                                        !window.confirm(
+                                          `Удалить проект «${proj.title}»? Это действие нельзя отменить.`,
+                                        )
+                                      ) {
+                                        return;
+                                      }
+                                      setBusy(true);
+                                      setError("");
+                                      try {
+                                        await deleteProject(proj.id);
+                                        setExpanded(null);
+                                        await load();
+                                      } catch (e) {
+                                        setError(e instanceof Error ? e.message : "Ошибка");
+                                      } finally {
+                                        setBusy(false);
+                                      }
+                                    }}
+                                    className="rounded-lg border border-red-500/50 px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+                                  >
+                                    Удалить проект
+                                  </button>
+                                )}
                               </div>
                             )}
                           </div>

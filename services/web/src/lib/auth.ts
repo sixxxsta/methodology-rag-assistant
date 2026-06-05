@@ -42,6 +42,9 @@ export function getCycleId(): number | null {
 
 export function setCycleId(id: number) {
   localStorage.setItem(CYCLE_KEY, String(id));
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event("edagent-cycle-changed"));
+  }
 }
 
 export function normalizeRole(role: string | undefined): User["role"] {

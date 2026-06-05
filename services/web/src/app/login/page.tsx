@@ -11,6 +11,7 @@ export default function LoginPage() {
   const router = useRouter();
   const [tab, setTab] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
+  const [fio, setFio] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -27,7 +28,7 @@ export default function LoginPage() {
       const data =
         tab === "login"
           ? await login(email, password)
-          : await register(email, password);
+          : await register(email, password, fio);
       setSession(data.token, data.user);
       router.replace("/");
     } catch (err) {
@@ -72,6 +73,20 @@ export default function LoginPage() {
         </div>
 
         <form onSubmit={submit} className="space-y-4">
+          {tab === "register" && (
+            <label className="block text-sm text-muted">
+              ФИО
+              <input
+                type="text"
+                required
+                minLength={2}
+                autoComplete="name"
+                value={fio}
+                onChange={(e) => setFio(e.target.value)}
+                className="mt-1.5 w-full rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-text outline-none focus:border-accent"
+              />
+            </label>
+          )}
           <label className="block text-sm text-muted">
             Email
             <input

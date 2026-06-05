@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { CycleBanner } from "@/components/cycle-banner";
 import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
 import {
@@ -13,6 +14,7 @@ import {
   sendOutreachLetter,
 } from "@/lib/api";
 import { canUseEdAgent, getUser } from "@/lib/auth";
+import { useActiveCycleId } from "@/lib/use-cycle";
 import clsx from "clsx";
 import { AlertTriangle, ArrowLeft, Send } from "lucide-react";
 
@@ -28,6 +30,7 @@ export default function OutreachPage() {
   const [inboundText, setInboundText] = useState("");
   const [agreementSummary, setAgreementSummary] = useState("");
   const canEdit = canUseEdAgent(getUser());
+  const cycleId = useActiveCycleId();
 
   const load = useCallback(async () => {
     setError("");
@@ -41,8 +44,9 @@ export default function OutreachPage() {
   }, []);
 
   useEffect(() => {
+    setLoading(true);
     load();
-  }, [load]);
+  }, [load, cycleId]);
 
   useEffect(() => {
     if (data?.companies?.length && inboundCompany === "") {
@@ -69,6 +73,7 @@ export default function OutreachPage() {
       <div className="flex min-h-screen flex-col md:flex-row">
         <Sidebar className="md:sticky md:top-0 md:h-screen" />
         <main className="flex-1 p-6 md:p-10">
+          <CycleBanner />
           <div className="mb-6 flex flex-wrap items-center gap-3">
             <Link href="/dashboard" className="flex items-center gap-2 text-sm text-muted hover:text-accent">
               <ArrowLeft className="h-4 w-4" />

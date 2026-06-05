@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -18,6 +19,7 @@ type Handlers struct {
 type registerRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	Fio      string `json:"fio"`
 }
 
 type loginRequest struct {
@@ -29,6 +31,7 @@ type createUserRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
 	Role     string `json:"role"`
+	Fio      string `json:"fio"`
 }
 
 func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
@@ -43,9 +46,14 @@ func (h *Handlers) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.Store.CreateUser(req.Email, req.Password, RoleStudent)
+	user, err := h.Store.CreateUser(req.Email, req.Password, RoleStudent, req.Fio)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := h.syncUserProfile(r, user); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -79,6 +87,8 @@ func (h *Handlers) Login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "role sync failed"})
 		return
 	}
+
+	_ = h.syncUserProfile(r, user)
 
 	token, err := h.Issuer.Sign(user)
 	if err != nil {
@@ -124,9 +134,14 @@ func (h *Handlers) CreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, err := h.Store.CreateUser(req.Email, req.Password, role)
+	user, err := h.Store.CreateUser(req.Email, req.Password, role, req.Fio)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := h.syncUserProfile(r, user); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -201,6 +216,42 @@ func (h *Handlers) purgeCoreStudentData(r *http.Request, email string) error {
 	return nil
 }
 
+func (h *Handlers) syncUserProfile(r *http.Request, user *User) error {
+	if h.CoreServiceURL == "" || strings.TrimSpace(user.Fio) == "" {
+		return nil
+	}
+	body, err := json.Marshal(map[string]string{
+		"email": user.Email,
+		"fio":   user.Fio,
+		"role":  user.Role,
+	})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(
+		r.Context(),
+		http.MethodPut,
+		strings.TrimRight(h.CoreServiceURL, "/")+"/api/internal/user-profile",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	if h.CoreInternalKey != "" {
+		req.Header.Set("X-Core-Internal-Key", h.CoreInternalKey)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("core profile sync returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
 func (h *Handlers) validateStudentRegistration(email string) error {
 	normalized := normalizeEmail(email)
 	if normalized == "" {
@@ -245,7 +296,7 @@ func EnsureAdmin(store *Store, adminEmail, adminPassword string) error {
 	if err == nil {
 		return nil
 	}
-	_, err = store.CreateUser(adminEmail, adminPassword, RoleAdmin)
+	_, err = store.CreateUser(adminEmail, adminPassword, RoleAdmin, "Администратор")
 	return err
 }
 

@@ -36,7 +36,7 @@ func TestRegisterCreatesStudent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	user, err := store.CreateUser("student@example.com", "secret12", RoleStudent)
+	user, err := store.CreateUser("student@example.com", "secret12", RoleStudent, "Студент Тест")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +59,7 @@ func TestSyncUserRoleDemotesFormerAdmin(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = store.Close() })
 
-	user, err := store.CreateUser("was@example.com", "secret12", RoleAdmin)
+	user, err := store.CreateUser("was@example.com", "secret12", RoleAdmin, "Бывший Админ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestSyncUserRoleDemotesFormerAdmin(t *testing.T) {
 		t.Fatalf("role = %s, want admin preserved when not matching ADMIN_EMAIL", updated.Role)
 	}
 
-	user2, err := store.CreateUser("real@example.com", "secret12", RoleStudent)
+	user2, err := store.CreateUser("real@example.com", "secret12", RoleStudent, "Реальный Админ")
 	if err != nil {
 		t.Fatal(err)
 	}
