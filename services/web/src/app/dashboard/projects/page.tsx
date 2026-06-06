@@ -3,17 +3,18 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { AppShell } from "@/components/app-shell";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { CycleBanner } from "@/components/cycle-banner";
 import { CuratorGuard } from "@/components/curator-guard";
 import { Sidebar } from "@/components/sidebar";
 import {
   approveProject,
-  approveProjectInterview,
   completeProjectsPhase,
+  createStandaloneProject,
   deleteProject,
   extendCatalogProject,
   fetchProjectsDashboard,
-  rejectProjectInterview,
   generateProjectTz,
   publishProject,
   syncProjectRoles,
@@ -30,14 +31,19 @@ export default function ProjectsPage() {
   const [data, setData] = useState<Dash | null>(null);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [busy, setBusy] = useState(false);
+  const [busyKey, setBusyKey] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<number | null>(null);
   const [editSpec, setEditSpec] = useState("");
   const [editTeamSize, setEditTeamSize] = useState(4);
   const [editMaxTeams, setEditMaxTeams] = useState(3);
   const [editInterviewRequired, setEditInterviewRequired] = useState(false);
+  const [standaloneTitle, setStandaloneTitle] = useState("");
+  const [standaloneSpec, setStandaloneSpec] = useState("");
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const canEdit = canUseEdAgent(getUser());
   const cycleId = useActiveCycleId();
+
+  const busy = (key: string) => busyKey === key;
 
   const load = useCallback(async () => {
     setError("");
@@ -56,7 +62,8 @@ export default function ProjectsPage() {
   }, [load, cycleId]);
 
   async function onGenerate(companyId: number, agreementId: number) {
-    setBusy(true);
+    const key = `generate:${agreementId}`;
+    setBusyKey(key);
     try {
       const p = await generateProjectTz(companyId, agreementId);
       setExpanded(p.id as number);
@@ -65,16 +72,15 @@ export default function ProjectsPage() {
     } catch (e) {
       setError(e instanceof Error ? e.message : "Ошибка генерации");
     } finally {
-      setBusy(false);
+      setBusyKey(null);
     }
   }
 
   return (
     <AuthGuard>
       <CuratorGuard>
-      <div className="flex min-h-screen flex-col md:flex-row">
-        <Sidebar className="md:sticky md:top-0 md:h-screen" />
-        <main className="flex-1 p-6 md:p-10">
+      <AppShell sidebar={<Sidebar className="hidden md:flex" />}>
+        <div className="p-6 md:p-10">
           <CycleBanner />
           <div className="mb-6 flex flex-wrap items-center gap-3">
             <Link
@@ -92,6 +98,14 @@ export default function ProjectsPage() {
               <BookOpen className="h-4 w-4" />
               Каталог для студентов
             </Link>
+            {(data?.pending_interviews?.length ?? 0) > 0 && (
+              <Link
+                href="/dashboard/interviews"
+                className="flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-200 hover:border-amber-500/50"
+              >
+                Собеседования: {data!.pending_interviews!.length}
+              </Link>
+            )}
           </div>
 
           {loading && <p className="text-muted">Загрузка…</p>}
@@ -112,69 +126,56 @@ export default function ProjectsPage() {
                 </p>
               )}
 
-              {(data.pending_interviews?.length ?? 0) > 0 && (
-                <section className="mb-8 rounded-xl border border-amber-500/30 bg-amber-500/5 p-4">
-                  <h2 className="mb-3 font-semibold">Собеседования на проверке</h2>
-                  <ul className="space-y-4">
-                    {data.pending_interviews.map((iv) => (
-                      <li key={iv.id} className="rounded-lg border border-border/60 bg-surface p-4 text-sm">
-                        <p className="font-medium">
-                          {iv.project_title} — {iv.team_name}
-                        </p>
-                        <p className="text-xs text-muted">
-                          Лидер: {iv.leader_fio || iv.leader_email}
-                        </p>
-                        <div className="mt-3 space-y-2">
-                          {iv.questions.map((q, i) => (
-                            <div key={i}>
-                              <p className="text-xs text-muted">{i + 1}. {q}</p>
-                              <p className="rounded border border-border/50 px-2 py-1 text-xs">
-                                {iv.answers[i] || "—"}
-                              </p>
-                            </div>
-                          ))}
-                        </div>
-                        {canEdit && (
-                          <div className="mt-3 flex flex-wrap gap-2">
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={async () => {
-                                setBusy(true);
-                                try {
-                                  await approveProjectInterview(iv.id);
-                                  await load();
-                                } finally {
-                                  setBusy(false);
-                                }
-                              }}
-                              className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
-                            >
-                              Одобрить команду
-                            </button>
-                            <button
-                              type="button"
-                              disabled={busy}
-                              onClick={async () => {
-                                const reason = window.prompt("Комментарий для команды:");
-                                if (!reason?.trim()) return;
-                                setBusy(true);
-                                try {
-                                  await rejectProjectInterview(iv.id, reason.trim());
-                                  await load();
-                                } finally {
-                                  setBusy(false);
-                                }
-                              }}
-                              className="rounded-lg border border-red-500/40 px-3 py-1.5 text-xs text-red-400 disabled:opacity-50"
-                            >
-                              Отклонить
-                            </button>
-                          </div>
-                        )}
-                      </li>
-                    ))}
-                  </ul>
+              {canEdit && (
+                <section className="mb-8 rounded-xl border border-border bg-surface-2 p-4">
+                  <h2 className="mb-2 font-semibold">Свой проект без партнёра</h2>
+                  <p className="mb-3 text-xs text-muted">
+                    Создайте проект сразу в каталог, без прохождения всех пяти фаз EdAgent.
+                  </p>
+                  <div className="space-y-3">
+                    <input
+                      type="text"
+                      value={standaloneTitle}
+                      onChange={(e) => setStandaloneTitle(e.target.value)}
+                      placeholder="Название проекта"
+                      className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm"
+                    />
+                    <textarea
+                      value={standaloneSpec}
+                      onChange={(e) => setStandaloneSpec(e.target.value)}
+                      rows={6}
+                      placeholder="Краткое ТЗ (необязательно)"
+                      className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm leading-relaxed"
+                    />
+                    <button
+                      type="button"
+                      disabled={!standaloneTitle.trim() || busy("standalone")}
+                      onClick={async () => {
+                        setBusyKey("standalone");
+                        setError("");
+                        try {
+                          const p = await createStandaloneProject({
+                            title: standaloneTitle.trim(),
+                            spec_markdown: standaloneSpec.trim() || undefined,
+                            team_size: editTeamSize,
+                            max_teams: editMaxTeams,
+                          });
+                          setStandaloneTitle("");
+                          setStandaloneSpec("");
+                          setExpanded(p.id);
+                          setEditSpec((p.spec_markdown as string) || "");
+                          await load();
+                        } catch (e) {
+                          setError(e instanceof Error ? e.message : "Ошибка");
+                        } finally {
+                          setBusyKey(null);
+                        }
+                      }}
+                      className="rounded-lg bg-accent px-4 py-2 text-sm text-white disabled:opacity-50"
+                    >
+                      {busy("standalone") ? "Создание…" : "Создать проект"}
+                    </button>
+                  </div>
                 </section>
               )}
 
@@ -199,11 +200,11 @@ export default function ProjectsPage() {
                       {canEdit && (
                         <button
                           type="button"
-                          disabled={busy}
+                          disabled={busy(`generate:${p.agreement_id}`)}
                           onClick={() => onGenerate(p.company_id, p.agreement_id)}
                           className="mt-3 flex items-center gap-2 rounded-lg bg-accent px-3 py-1.5 text-xs text-white disabled:opacity-50"
                         >
-                          {busy ? (
+                          {busy(`generate:${p.agreement_id}`) ? (
                             <Loader2 className="h-3 w-3 animate-spin" />
                           ) : (
                             <FileText className="h-3 w-3" />
@@ -338,16 +339,16 @@ export default function ProjectsPage() {
                               value={editSpec}
                               onChange={(e) => setEditSpec(e.target.value)}
                               rows={12}
-                              className="w-full rounded-lg border border-border bg-surface px-3 py-2 font-mono text-xs"
+                              className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm leading-relaxed"
                               readOnly={!canEdit}
                             />
                             {canEdit && (
                               <div className="flex flex-wrap gap-2">
                                 <button
                                   type="button"
-                                  disabled={busy}
+                                  disabled={busy(`save:${proj.id}`)}
                                   onClick={async () => {
-                                    setBusy(true);
+                                    setBusyKey(`save:${proj.id}`);
                                     try {
                                       await updateProject(proj.id, {
                                         spec_markdown: editSpec,
@@ -357,45 +358,45 @@ export default function ProjectsPage() {
                                       });
                                       await load();
                                     } finally {
-                                      setBusy(false);
+                                      setBusyKey(null);
                                     }
                                   }}
-                                  className="rounded-lg border border-border px-3 py-1.5 text-xs"
+                                  className="rounded-lg border border-border px-3 py-1.5 text-xs disabled:opacity-50"
                                 >
                                   Сохранить ТЗ и параметры команд
                                 </button>
                                 <button
                                   type="button"
-                                  disabled={busy}
+                                  disabled={busy(`roles:${proj.id}`)}
                                   onClick={async () => {
-                                    setBusy(true);
+                                    setBusyKey(`roles:${proj.id}`);
                                     try {
                                       await syncProjectRoles(proj.id);
                                       await load();
                                     } catch (e) {
                                       setError(e instanceof Error ? e.message : "Ошибка");
                                     } finally {
-                                      setBusy(false);
+                                      setBusyKey(null);
                                     }
                                   }}
-                                  className="rounded-lg border border-border px-3 py-1.5 text-xs"
+                                  className="rounded-lg border border-border px-3 py-1.5 text-xs disabled:opacity-50"
                                 >
                                   Обновить роли из ТЗ
                                 </button>
                                 {proj.status === "draft" && (
                                   <button
                                     type="button"
-                                    disabled={busy}
+                                    disabled={busy(`approve:${proj.id}`)}
                                     onClick={async () => {
-                                      setBusy(true);
+                                      setBusyKey(`approve:${proj.id}`);
                                       try {
                                         await approveProject(proj.id);
                                         await load();
                                       } finally {
-                                        setBusy(false);
+                                        setBusyKey(null);
                                       }
                                     }}
-                                    className="rounded-lg bg-accent px-3 py-1.5 text-xs text-white"
+                                    className="rounded-lg bg-accent px-3 py-1.5 text-xs text-white disabled:opacity-50"
                                   >
                                     Утвердить ТЗ
                                   </button>
@@ -403,7 +404,9 @@ export default function ProjectsPage() {
                                 {proj.status === "approved" && !proj.catalog_visible && (
                                   <button
                                     type="button"
-                                    disabled={busy || proj.publish_ready === false}
+                                    disabled={
+                                      busy(`publish:${proj.id}`) || proj.publish_ready === false
+                                    }
                                     title={
                                       proj.publish_block_reason ||
                                       "Сначала укажите размер команды и число слотов"
@@ -422,12 +425,12 @@ export default function ProjectsPage() {
                                       const opts = permanent
                                         ? { catalog_mode: "permanent" as const }
                                         : { catalog_mode: "temporary" as const, catalog_months: 5 };
-                                      setBusy(true);
+                                      setBusyKey(`publish:${proj.id}`);
                                       try {
                                         await publishProject(proj.id, opts);
                                         await load();
                                       } finally {
-                                        setBusy(false);
+                                        setBusyKey(null);
                                       }
                                     }}
                                     className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs text-white disabled:opacity-50"
@@ -441,7 +444,7 @@ export default function ProjectsPage() {
                                     proj.catalog_mode === "temporary") && (
                                     <button
                                       type="button"
-                                      disabled={busy}
+                                      disabled={busy(`extend:${proj.id}`)}
                                       onClick={async () => {
                                         const months = window.prompt(
                                           "Продлить показ в каталоге на сколько месяцев?",
@@ -453,7 +456,7 @@ export default function ProjectsPage() {
                                           setError("Укажите число месяцев от 1 до 60");
                                           return;
                                         }
-                                        setBusy(true);
+                                        setBusyKey(`extend:${proj.id}`);
                                         setError("");
                                         try {
                                           await extendCatalogProject(proj.id, n);
@@ -463,7 +466,7 @@ export default function ProjectsPage() {
                                             e instanceof Error ? e.message : "Ошибка",
                                           );
                                         } finally {
-                                          setBusy(false);
+                                          setBusyKey(null);
                                         }
                                       }}
                                       className="rounded-lg border border-amber-500/50 px-3 py-1.5 text-xs text-amber-300 hover:bg-amber-500/10 disabled:opacity-50"
@@ -474,27 +477,8 @@ export default function ProjectsPage() {
                                 {canEdit && proj.can_delete && (
                                   <button
                                     type="button"
-                                    disabled={busy}
-                                    onClick={async () => {
-                                      if (
-                                        !window.confirm(
-                                          `Удалить проект «${proj.title}»? Это действие нельзя отменить.`,
-                                        )
-                                      ) {
-                                        return;
-                                      }
-                                      setBusy(true);
-                                      setError("");
-                                      try {
-                                        await deleteProject(proj.id);
-                                        setExpanded(null);
-                                        await load();
-                                      } catch (e) {
-                                        setError(e instanceof Error ? e.message : "Ошибка");
-                                      } finally {
-                                        setBusy(false);
-                                      }
-                                    }}
+                                    disabled={busy(`delete:${proj.id}`)}
+                                    onClick={() => setConfirmDeleteId(proj.id)}
                                     className="rounded-lg border border-red-500/50 px-3 py-1.5 text-xs text-red-400 hover:bg-red-500/10 disabled:opacity-50"
                                   >
                                     Удалить проект
@@ -513,16 +497,16 @@ export default function ProjectsPage() {
               {canEdit && data.catalog_published >= 1 && data.phase_status === "active" && (
                 <button
                   type="button"
-                  disabled={busy}
+                  disabled={busy("complete-phase")}
                   onClick={async () => {
-                    setBusy(true);
+                    setBusyKey("complete-phase");
                     try {
                       await completeProjectsPhase();
                       await load();
                     } catch (e) {
                       setError(e instanceof Error ? e.message : "Ошибка");
                     } finally {
-                      setBusy(false);
+                      setBusyKey(null);
                     }
                   }}
                   className="rounded-lg bg-emerald-600 px-4 py-2 text-sm text-white disabled:opacity-50"
@@ -532,8 +516,34 @@ export default function ProjectsPage() {
               )}
             </>
           )}
-        </main>
-      </div>
+
+          <ConfirmDialog
+            open={confirmDeleteId != null}
+            title="Удаление проекта"
+            message="Вы действительно хотите удалить этот проект? Это действие нельзя отменить."
+            confirmLabel="Да"
+            cancelLabel="Нет"
+            danger
+            onCancel={() => setConfirmDeleteId(null)}
+            onConfirm={async () => {
+              if (confirmDeleteId == null) return;
+              const id = confirmDeleteId;
+              setConfirmDeleteId(null);
+              setBusyKey(`delete:${id}`);
+              setError("");
+              try {
+                await deleteProject(id);
+                setExpanded(null);
+                await load();
+              } catch (e) {
+                setError(e instanceof Error ? e.message : "Ошибка");
+              } finally {
+                setBusyKey(null);
+              }
+            }}
+          />
+        </div>
+      </AppShell>
     </CuratorGuard>
     </AuthGuard>
   );

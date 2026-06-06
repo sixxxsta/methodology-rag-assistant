@@ -11,6 +11,7 @@ from ..security import require_admin, require_curator, require_edagent, require_
 from .service import (
     approve_project,
     complete_projects_phase,
+    create_standalone_project,
     dashboard,
     delete_project,
     generate_project,
@@ -30,6 +31,7 @@ from .interviews import (
     reject_team_interview,
     start_team_interview,
     submit_team_interview,
+    withdraw_team_interview,
 )
 from .team_claims import claim_project_for_team, withdraw_team_claim
 from .roles import list_project_roles
@@ -39,6 +41,14 @@ router = APIRouter(prefix="/projects", tags=["projects"])
 
 class GenerateIn(BaseModel):
     agreement_id: int | None = None
+
+
+class StandaloneProjectIn(BaseModel):
+    title: str = Field(min_length=2, max_length=512)
+    spec_markdown: str | None = None
+    team_size: int | None = Field(default=4, ge=1, le=5)
+    max_teams: int | None = Field(default=3, ge=1, le=50)
+    duration_weeks: int | None = Field(default=12, ge=1, le=104)
 
 
 class UpdateIn(BaseModel):
@@ -109,7 +119,14 @@ def pending_interviews(
     from ..cycles.service import get_work_context
 
     ctx = get_work_context(db)
-    return {"items": list_pending_interviews(db, ctx.cycle_id)}
+    return {
+        "items": list_pending_interviews(
+            db,
+            workspace_id=ctx.workspace_id,
+            actor_email=user["email"],
+            actor_role=user["role"],
+        )
+    }
 
 
 @router.post("/interviews/{interview_id}/approve")
@@ -175,7 +192,14 @@ def catalog(
     user: Annotated[dict[str, str], Depends(require_internal)] = None,
 ):
     filters = [part.strip() for part in (competencies or "").split(",") if part.strip()]
-    return {"items": list_catalog(db, competencies=filters or None)}
+    return {
+        "items": list_catalog(
+            db,
+            competencies=filters or None,
+            actor_email=user["email"],
+            actor_role=user.get("role", ""),
+        )
+    }
 
 
 @router.get("/catalog/{project_id}")
@@ -185,7 +209,13 @@ def catalog_project(
     user: Annotated[dict[str, str], Depends(require_internal)] = None,
 ):
     try:
-        return get_catalog_project(db, project_id, viewer_email=user["email"])
+        return get_catalog_project(
+            db,
+            project_id,
+            viewer_email=user["email"],
+            actor_email=user["email"],
+            actor_role=user.get("role", ""),
+        )
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -194,7 +224,7 @@ def catalog_project(
 def catalog_remove_project(
     project_id: int,
     db: Session = Depends(get_db),
-    user: Annotated[dict[str, str], Depends(require_admin)] = None,
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
 ):
     try:
         return delete_project(
@@ -238,6 +268,20 @@ def catalog_interview_submit(
             leader_email=user["email"],
             answers=body.answers,
         )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/catalog/{project_id}/interview/withdraw")
+def catalog_interview_withdraw(
+    project_id: int,
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_student)] = None,
+):
+    try:
+        return withdraw_team_interview(db, project_id, leader_email=user["email"])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -344,6 +388,26 @@ def project_detail(
         return data
     except Exception as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/standalone")
+def create_standalone(
+    body: StandaloneProjectIn,
+    db: Session = Depends(get_db),
+    user: Annotated[dict[str, str], Depends(require_curator)] = None,
+):
+    try:
+        return create_standalone_project(
+            db,
+            actor_email=user["email"],
+            title=body.title,
+            spec_markdown=body.spec_markdown,
+            team_size=body.team_size,
+            max_teams=body.max_teams,
+            duration_weeks=body.duration_weeks,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/companies/{company_id}/generate")

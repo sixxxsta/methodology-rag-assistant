@@ -5,6 +5,7 @@ import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
 import { CycleBanner } from "@/components/cycle-banner";
 import { CuratorGuard } from "@/components/curator-guard";
+import { AppShell } from "@/components/app-shell";
 import { Sidebar } from "@/components/sidebar";
 import {
   fetchScoringWeights,
@@ -169,9 +170,8 @@ export default function CompaniesPage() {
   return (
     <AuthGuard>
       <CuratorGuard>
-      <div className="flex min-h-screen flex-col md:flex-row">
-        <Sidebar className="md:sticky md:top-0 md:h-screen" />
-        <main className="flex-1 p-6 md:p-10">
+      <AppShell sidebar={<Sidebar className="hidden md:flex" />}>
+        <div className="p-6 md:p-10">
           <CycleBanner />
           <div className="mb-6 flex flex-wrap items-center gap-3">
             <Link href="/dashboard" className="flex items-center gap-2 text-sm text-muted hover:text-accent">
@@ -461,8 +461,8 @@ export default function CompaniesPage() {
               ))}
             </div>
           )}
-        </main>
-      </div>
+        </div>
+      </AppShell>
     </CuratorGuard>
     </AuthGuard>
   );

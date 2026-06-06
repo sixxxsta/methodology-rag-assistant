@@ -30,7 +30,7 @@ from .catalog import (
     resolve_catalog_until,
 )
 from .limits import MAX_TEAM_MEMBERS, clamp_team_size, validate_catalog_publish_params
-from .generator import competencies_for_workspace, parse_tz_response, tz_prompt
+from .generator import competencies_for_workspace, humanize_spec, parse_tz_response, tz_prompt
 from .roles import list_project_roles, sync_roles_from_spec
 from .enrollment import (
     active_enrollment_count,
@@ -191,7 +191,12 @@ def dashboard(
             }
             for p in projects
         ],
-        "pending_interviews": list_pending_interviews(db, cid),
+        "pending_interviews": list_pending_interviews(
+            db,
+            workspace_id=ws.id,
+            actor_email=actor_email,
+            actor_role=actor_role,
+        ),
     }
 
 
@@ -255,7 +260,7 @@ def generate_project(
         project.title = title
 
     project.spec_markdown = spec
-    project.description = spec[:500] if spec else None
+    project.description = (spec[:500] if spec else None)
     project.team_size = clamp_team_size(team_size, default=4)
     project.max_teams = 3
     project.duration_weeks = duration_weeks or 12
@@ -284,6 +289,57 @@ def generate_project(
     return _project_dict(project, company.name, db)
 
 
+def create_standalone_project(
+    db: Session,
+    *,
+    actor_email: str,
+    title: str,
+    spec_markdown: str | None = None,
+    team_size: int | None = 4,
+    max_teams: int | None = 3,
+    duration_weeks: int | None = 12,
+) -> dict:
+    """Create a draft project without going through outreach phases."""
+    ctx = get_work_context(db)
+    ws = ctx.workspace
+    cid = ctx.cycle_id
+    spec = humanize_spec((spec_markdown or "").strip()) or (
+        "## Цель\nОпишите цель проекта.\n\n## Задачи\n- \n\n## Критерии приёмки\n- "
+    )
+    project = Project(
+        workspace_id=ws.id,
+        cycle_id=cid,
+        company_id=None,
+        agreement_id=None,
+        title=title.strip(),
+        spec_markdown=spec,
+        description=spec[:500],
+        team_size=clamp_team_size(team_size, default=4),
+        max_teams=max(max_teams or 3, 1),
+        duration_weeks=duration_weeks or 12,
+        status="draft",
+        catalog_visible=False,
+    )
+    db.add(project)
+    phase = get_phase_run(db, cid, PhaseKey.PROJECTS.value)
+    if phase.status == PhaseStatus.LOCKED.value:
+        phase.status = PhaseStatus.ACTIVE.value
+        phase.progress_pct = max(phase.progress_pct, 10)
+    log_action(
+        db,
+        workspace_id=ws.id,
+        actor_email=actor_email,
+        action="projects.standalone.create",
+        entity_type="project",
+        details=title[:200],
+    )
+    db.commit()
+    db.refresh(project)
+    sync_roles_from_spec(db, project)
+    db.commit()
+    return _project_dict(project, None, db)
+
+
 def update_project(
     db: Session,
     project_id: int,
@@ -308,8 +364,8 @@ def update_project(
     if title is not None:
         project.title = title
     if spec_markdown is not None:
-        project.spec_markdown = spec_markdown
-        project.description = spec_markdown[:500]
+        project.spec_markdown = humanize_spec(spec_markdown)
+        project.description = (project.spec_markdown or "")[:500]
     if team_size is not None:
         project.team_size = clamp_team_size(team_size)
     if max_teams is not None:
@@ -449,7 +505,13 @@ def _catalog_meta(db: Session, project: Project) -> dict:
     }
 
 
-def list_catalog(db: Session, *, competencies: list[str] | None = None) -> list[dict]:
+def list_catalog(
+    db: Session,
+    *,
+    competencies: list[str] | None = None,
+    actor_email: str | None = None,
+    actor_role: str | None = None,
+) -> list[dict]:
     from ..models import PartnershipCycle
 
     needles = [c.strip().lower() for c in (competencies or []) if c.strip()]
@@ -470,12 +532,25 @@ def list_catalog(db: Session, *, competencies: list[str] | None = None) -> list[
         item["cycle_name"] = cycle.name
         item.pop("spec_markdown", None)
         item.update(_catalog_meta(db, proj))
+        role = (actor_role or "").strip().lower()
+        if role == "user":
+            role = "curator"
+        item["can_delete"] = role == "admin" or (
+            role == "curator"
+            and bool(actor_email)
+            and _can_delete_project(cycle, actor_email=actor_email, actor_role=role)
+        )
         out.append(item)
     return out
 
 
 def get_catalog_project(
-    db: Session, project_id: int, *, viewer_email: str | None = None
+    db: Session,
+    project_id: int,
+    *,
+    viewer_email: str | None = None,
+    actor_email: str | None = None,
+    actor_role: str | None = None,
 ) -> dict:
     from ..models import PartnershipCycle
 
@@ -506,6 +581,15 @@ def get_catalog_project(
             }
         else:
             data["my_enrollment"] = None
+
+    role = (actor_role or "").strip().lower()
+    if role == "user":
+        role = "curator"
+    data["can_delete"] = role == "admin" or (
+        role == "curator"
+        and bool(actor_email)
+        and _can_delete_project(cycle, actor_email=actor_email, actor_role=role)
+    )
 
     return data
 
@@ -581,7 +665,11 @@ def delete_project(
     actor_role: str,
     from_catalog: bool = False,
 ) -> dict:
-    if actor_role == "admin":
+    role = (actor_role or "").strip().lower()
+    if role == "user":
+        role = "curator"
+
+    if role == "admin" or from_catalog:
         project = db.query(Project).filter(Project.id == project_id).one()
         cycle = (
             db.query(PartnershipCycle)
@@ -589,6 +677,12 @@ def delete_project(
             .one()
         )
         workspace_id = project.workspace_id
+        if role != "admin" and not _can_delete_project(
+            cycle, actor_email=actor_email, actor_role=role
+        ):
+            raise ValueError(
+                "удалять проект может владелец цикла; модерация может удалить любой проект"
+            )
     else:
         ctx = get_work_context(db)
         cycle = ctx.cycle
@@ -598,13 +692,10 @@ def delete_project(
             .filter(Project.cycle_id == ctx.cycle_id, Project.id == project_id)
             .one()
         )
-        if not _can_delete_project(cycle, actor_email=actor_email, actor_role=actor_role):
+        if not _can_delete_project(cycle, actor_email=actor_email, actor_role=role):
             raise ValueError(
                 "удалять проект может владелец цикла; модерация может удалить любой проект"
             )
-
-    if from_catalog and actor_role != "admin":
-        raise ValueError("удалять из каталога может только модерация")
 
     title = project.title
     db.query(ProjectTeamInterview).filter(

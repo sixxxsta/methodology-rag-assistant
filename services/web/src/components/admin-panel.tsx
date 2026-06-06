@@ -4,13 +4,14 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Database, RefreshCw, Trash2, Upload } from "lucide-react";
 import {
-  createStaffUser,
   deleteKnowledgeFile,
   ingestKnowledge,
   listKnowledgeFiles,
   uploadKnowledgeFile,
 } from "@/lib/api";
 import type { IngestResult, KnowledgeFile } from "@/lib/types";
+import { AddCuratorForm } from "./add-curator-form";
+import { AppShell } from "./app-shell";
 import { Sidebar } from "./sidebar";
 import clsx from "clsx";
 
@@ -19,11 +20,6 @@ export function AdminPanel() {
   const [log, setLog] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [ingesting, setIngesting] = useState(false);
-  const [staffEmail, setStaffEmail] = useState("");
-  const [staffFio, setStaffFio] = useState("");
-  const [staffPassword, setStaffPassword] = useState("");
-  const [staffRole, setStaffRole] = useState<"curator" | "admin">("curator");
-  const [staffBusy, setStaffBusy] = useState(false);
 
   const pushLog = (msg: string) => setLog((l) => [msg, ...l]);
 
@@ -82,32 +78,9 @@ export function AdminPanel() {
     }
   }
 
-  async function onCreateStaff(e: React.FormEvent) {
-    e.preventDefault();
-    setStaffBusy(true);
-    try {
-      const res = await createStaffUser({
-        email: staffEmail.trim(),
-        fio: staffFio.trim(),
-        password: staffPassword,
-        role: staffRole,
-      });
-      pushLog(`Создан аккаунт ${res.user.fio || res.user.email} (${staffRole})`);
-      setStaffEmail("");
-      setStaffFio("");
-      setStaffPassword("");
-    } catch (err) {
-      pushLog(err instanceof Error ? err.message : "Ошибка создания аккаунта");
-    } finally {
-      setStaffBusy(false);
-    }
-  }
-
   return (
-    <div className="flex min-h-screen flex-col md:flex-row">
-      <Sidebar className="hidden md:flex" />
-
-      <main className="flex-1 p-6 md:p-10">
+    <AppShell sidebar={<Sidebar className="hidden md:flex" />}>
+      <div className="p-6 md:p-10">
         <div className="mx-auto max-w-3xl">
           <Link
             href="/"
@@ -122,63 +95,16 @@ export function AdminPanel() {
             Загрузите .md / .txt и переиндексируйте Qdrant
           </p>
 
-          <section className="mt-8 rounded-2xl border border-border bg-surface-2 p-5">
-            <h2 className="font-semibold">Аккаунты кураторов</h2>
+          <section id="curators" className="mt-8 rounded-2xl border border-border bg-surface-2 p-5">
+            <h2 className="font-semibold">Кураторы</h2>
             <p className="mt-1 text-sm text-muted">
-              Ученики регистрируются сами. Кураторов и модераторов создаёт только модерация.
+              Ученики регистрируются сами. Кураторов создаёт только модерация.
             </p>
-            <form onSubmit={onCreateStaff} className="mt-4 grid gap-3 sm:grid-cols-2">
-              <label className="block text-sm text-muted sm:col-span-2">
-                ФИО
-                <input
-                  type="text"
-                  required
-                  minLength={2}
-                  value={staffFio}
-                  onChange={(e) => setStaffFio(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-border bg-surface px-3 py-2 text-text outline-none focus:border-accent"
-                />
-              </label>
-              <label className="block text-sm text-muted sm:col-span-2">
-                Email
-                <input
-                  type="email"
-                  required
-                  value={staffEmail}
-                  onChange={(e) => setStaffEmail(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-border bg-surface px-3 py-2 text-text outline-none focus:border-accent"
-                />
-              </label>
-              <label className="block text-sm text-muted">
-                Пароль (мин. 6)
-                <input
-                  type="password"
-                  required
-                  minLength={6}
-                  value={staffPassword}
-                  onChange={(e) => setStaffPassword(e.target.value)}
-                  className="mt-1 w-full rounded-xl border border-border bg-surface px-3 py-2 text-text outline-none focus:border-accent"
-                />
-              </label>
-              <label className="block text-sm text-muted">
-                Роль
-                <select
-                  value={staffRole}
-                  onChange={(e) => setStaffRole(e.target.value as "curator" | "admin")}
-                  className="mt-1 w-full rounded-xl border border-border bg-surface px-3 py-2 text-text outline-none focus:border-accent"
-                >
-                  <option value="curator">Куратор</option>
-                  <option value="admin">Модерация</option>
-                </select>
-              </label>
-              <button
-                type="submit"
-                disabled={staffBusy}
-                className="rounded-xl bg-accent px-4 py-2.5 text-sm font-medium text-white disabled:opacity-50 sm:col-span-2 sm:w-fit"
-              >
-                {staffBusy ? "Создание…" : "Создать аккаунт"}
-              </button>
-            </form>
+            <AddCuratorForm
+              className="mt-4"
+              onSuccess={pushLog}
+              onError={pushLog}
+            />
           </section>
 
           <div className="mt-6 flex flex-wrap gap-3">
@@ -248,7 +174,7 @@ export function AdminPanel() {
             </div>
           )}
         </div>
-      </main>
-    </div>
+      </div>
+    </AppShell>
   );
 }

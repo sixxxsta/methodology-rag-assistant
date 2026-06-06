@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { AddCuratorForm } from "@/components/add-curator-form";
 import { CuratorGuard } from "@/components/curator-guard";
+import { AppShell } from "@/components/app-shell";
 import { Sidebar } from "@/components/sidebar";
 import { approveIndustry, activatePartnershipCycle, createPartnershipCycle, deletePartnershipCycle, fetchCycles, fetchDashboard, reopenCyclePhase, resolveEscalation } from "@/lib/api";
-import { canUseEdAgent, getUser, setCycleId } from "@/lib/auth";
+import { canUseEdAgent, getUser, isAdmin, setCycleId } from "@/lib/auth";
 import { useActiveCycleId } from "@/lib/use-cycle";
 import type { DashboardData } from "@/lib/types";
 import clsx from "clsx";
@@ -45,7 +47,9 @@ export default function DashboardPage() {
   const [cycles, setCycles] = useState<Awaited<ReturnType<typeof fetchCycles>>["cycles"]>([]);
   const [newCycleName, setNewCycleName] = useState("");
   const [busy, setBusy] = useState(false);
+  const [staffMsg, setStaffMsg] = useState("");
   const cycleId = useActiveCycleId();
+  const admin = isAdmin(getUser());
 
   const load = useCallback(async () => {
     setError("");
@@ -95,9 +99,8 @@ export default function DashboardPage() {
   return (
     <AuthGuard>
       <CuratorGuard>
-      <div className="flex min-h-screen flex-col md:flex-row">
-        <Sidebar className="md:sticky md:top-0 md:h-screen" />
-        <main className="flex-1 p-6 md:p-10">
+      <AppShell sidebar={<Sidebar className="hidden md:flex" />}>
+        <div className="p-6 md:p-10">
           <div className="mb-8 flex flex-wrap items-center gap-4">
             <Link
               href="/"
@@ -108,6 +111,24 @@ export default function DashboardPage() {
             </Link>
             <h1 className="text-2xl font-bold">EdAgent — цикл партнёрства</h1>
           </div>
+
+          {admin && (
+            <section className="mb-8 rounded-2xl border border-border bg-surface-2 p-5">
+              <h2 className="mb-1 font-semibold">Модерация</h2>
+              <p className="mb-4 text-sm text-muted">
+                Создайте аккаунт куратора — он сможет вести свой цикл партнёрства.
+              </p>
+              <AddCuratorForm
+                onSuccess={(msg) => setStaffMsg(msg)}
+                onError={(msg) => setStaffMsg(msg)}
+              />
+              {staffMsg && (
+                <p className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+                  {staffMsg}
+                </p>
+              )}
+            </section>
+          )}
 
           {data?.workspace.active_cycle && (
             <section className="mb-8 rounded-2xl border border-border bg-surface-2 p-5">
@@ -431,8 +452,8 @@ export default function DashboardPage() {
               </section>
             </>
           )}
-        </main>
-      </div>
+        </div>
+      </AppShell>
     </CuratorGuard>
     </AuthGuard>
   );

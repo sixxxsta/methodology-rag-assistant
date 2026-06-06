@@ -121,9 +121,37 @@ def interview_context(
                 is_leader and (row is None or failed) and not passed and not submitted
             ),
             "can_submit_interview": bool(is_leader and pending),
+            "can_withdraw_interview": bool(
+                is_leader
+                and row is not None
+                and row.status in (INTERVIEW_SUBMITTED, INTERVIEW_PENDING)
+            ),
         }
     )
     return base
+
+
+def withdraw_team_interview(db: Session, project_id: int, *, leader_email: str) -> dict:
+    email = _norm(leader_email)
+    team = _active_team_for_student(db, email)
+    if not team or _norm(team.leader_email) != email:
+        raise ValueError("отозвать собеседование может только лидер команды")
+
+    project = db.query(Project).filter(Project.id == project_id).one()
+    if not getattr(project, "interview_required", False):
+        raise ValueError("для этого проекта собеседование не требуется")
+
+    row = _get_interview_row(db, project_id, team.id)
+    if not row:
+        raise ValueError("нет активного собеседования")
+    if row.status == INTERVIEW_PASSED:
+        raise ValueError("одобренное куратором собеседование отозвать нельзя")
+    if row.status not in (INTERVIEW_SUBMITTED, INTERVIEW_PENDING):
+        raise ValueError("сейчас нельзя отозвать это собеседование")
+
+    db.delete(row)
+    db.commit()
+    return {"status": "withdrawn"}
 
 
 def start_team_interview(db: Session, project_id: int, *, leader_email: str) -> dict:
@@ -228,22 +256,39 @@ def submit_team_interview(
     }
 
 
-def list_pending_interviews(db: Session, cycle_id: int) -> list[dict]:
-    rows = (
-        db.query(ProjectTeamInterview, Project, StudentTeam)
+def list_pending_interviews(
+    db: Session,
+    *,
+    workspace_id: int,
+    actor_email: str | None = None,
+    actor_role: str | None = None,
+) -> list[dict]:
+    from ..models import PartnershipCycle
+
+    role = (actor_role or "").strip().lower()
+    if role == "user":
+        role = "curator"
+    email = _norm(actor_email or "")
+
+    q = (
+        db.query(ProjectTeamInterview, Project, StudentTeam, PartnershipCycle)
         .join(Project, ProjectTeamInterview.project_id == Project.id)
         .join(StudentTeam, ProjectTeamInterview.team_id == StudentTeam.id)
+        .join(PartnershipCycle, Project.cycle_id == PartnershipCycle.id)
         .filter(
-            Project.cycle_id == cycle_id,
+            Project.workspace_id == workspace_id,
             ProjectTeamInterview.status == INTERVIEW_SUBMITTED,
+            PartnershipCycle.status != "deleted",
         )
-        .order_by(ProjectTeamInterview.submitted_at.asc())
-        .all()
     )
-    emails = [iv.leader_email for iv, _, _ in rows]
+    if role != "admin" and email:
+        q = q.filter(PartnershipCycle.created_by.ilike(email))
+
+    rows = q.order_by(ProjectTeamInterview.submitted_at.asc()).all()
+    emails = [iv.leader_email for iv, _, _, _ in rows]
     names = display_names(db, emails)
     out: list[dict] = []
-    for iv, proj, team in rows:
+    for iv, proj, team, cycle in rows:
         item = _interview_dict(db, iv) or {}
         item.update(
             {
@@ -251,6 +296,8 @@ def list_pending_interviews(db: Session, cycle_id: int) -> list[dict]:
                 "project_title": proj.title,
                 "team_name": team.name or f"Команда #{team.id}",
                 "leader_fio": names.get(_norm(iv.leader_email), iv.leader_email),
+                "cycle_id": cycle.id,
+                "cycle_name": cycle.name,
             }
         )
         out.append(item)
@@ -273,9 +320,41 @@ def approve_team_interview(
     row.curator_feedback = (feedback or "Одобрено куратором").strip()
     row.reviewed_at = now
     row.passed_at = now
-    db.commit()
+
+    from .team_claims import claim_project_for_team, get_active_claim_for_team, _claim_dict
+
+    claim: dict | None = None
+    claim_note: str | None = None
+    committed = False
+    existing = get_active_claim_for_team(db, row.team_id)
+    if existing and existing.project_id == row.project_id:
+        project = db.query(Project).filter(Project.id == row.project_id).one()
+        claim = _claim_dict(existing, project)
+    elif existing:
+        prior = db.query(Project).filter(Project.id == existing.project_id).one_or_none()
+        title = prior.title if prior else f"#{existing.project_id}"
+        claim_note = f"команда уже закреплена за проектом «{title}»"
+    else:
+        try:
+            claim = claim_project_for_team(
+                db,
+                row.project_id,
+                leader_email=row.leader_email,
+            )
+            committed = True
+        except ValueError as exc:
+            claim_note = str(exc)
+
+    if not committed:
+        db.commit()
     db.refresh(row)
-    return _interview_dict(db, row) or {}
+    result = _interview_dict(db, row) or {}
+    result["team_claimed"] = claim is not None
+    if claim:
+        result["claim"] = claim
+    if claim_note:
+        result["claim_note"] = claim_note
+    return result
 
 
 def reject_team_interview(

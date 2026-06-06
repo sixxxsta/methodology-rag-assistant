@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { AppShell } from "@/components/app-shell";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Sidebar } from "@/components/sidebar";
 import {
   deleteCatalogProject,
@@ -12,7 +14,7 @@ import {
   fetchStudentProfile,
   saveStudentProfile,
 } from "@/lib/api";
-import { canUseEdAgent, getUser, isAdmin, isStudent } from "@/lib/auth";
+import { canUseEdAgent, getUser, isStudent } from "@/lib/auth";
 import { ArrowLeft, BookOpen, Search, Sparkles, Trash2 } from "lucide-react";
 
 export default function CatalogPage() {
@@ -34,9 +36,9 @@ export default function CatalogPage() {
   const [error, setError] = useState("");
   const user = getUser();
   const student = isStudent(user);
-  const moderation = isAdmin(user);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     setError("");
@@ -78,9 +80,8 @@ export default function CatalogPage() {
 
   return (
     <AuthGuard>
-      <div className="flex min-h-screen flex-col md:flex-row">
-        <Sidebar className="md:sticky md:top-0 md:h-screen" />
-        <main className="flex-1 p-6 md:p-10">
+      <AppShell sidebar={<Sidebar className="hidden md:flex" />}>
+        <div className="p-6 md:p-10">
           <div className="mb-6 flex flex-wrap items-center gap-3">
             <Link
               href={backHref}
@@ -254,29 +255,14 @@ export default function CatalogPage() {
                   <Link href={`/catalog/${item.id}`} className="min-w-0 flex-1">
                     <h2 className="font-semibold leading-snug hover:text-accent">{item.title}</h2>
                   </Link>
-                  {moderation && (
+                  {item.can_delete && (
                     <button
                       type="button"
-                      title="Удалить из каталога"
+                      title="Удалить проект"
                       disabled={busyId === item.id}
-                      onClick={async () => {
-                        if (
-                          !window.confirm(
-                            `Удалить проект «${item.title}» из каталога? Это действие нельзя отменить.`,
-                          )
-                        ) {
-                          return;
-                        }
-                        setBusyId(item.id);
-                        setError("");
-                        try {
-                          await deleteCatalogProject(item.id);
-                          await load();
-                        } catch (e) {
-                          setError(e instanceof Error ? e.message : "Ошибка удаления");
-                        } finally {
-                          setBusyId(null);
-                        }
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setConfirmDeleteId(item.id);
                       }}
                       className="shrink-0 rounded-lg border border-red-500/40 p-2 text-red-400 hover:bg-red-500/10 disabled:opacity-50"
                     >
@@ -320,8 +306,33 @@ export default function CatalogPage() {
               </li>
             ))}
           </ul>
-        </main>
-      </div>
+
+          <ConfirmDialog
+            open={confirmDeleteId != null}
+            title="Удаление проекта"
+            message="Вы действительно хотите удалить этот проект? Это действие нельзя отменить."
+            confirmLabel="Да"
+            cancelLabel="Нет"
+            danger
+            onCancel={() => setConfirmDeleteId(null)}
+            onConfirm={async () => {
+              if (confirmDeleteId == null) return;
+              const id = confirmDeleteId;
+              setConfirmDeleteId(null);
+              setBusyId(id);
+              setError("");
+              try {
+                await deleteCatalogProject(id);
+                await load();
+              } catch (e) {
+                setError(e instanceof Error ? e.message : "Ошибка удаления");
+              } finally {
+                setBusyId(null);
+              }
+            }}
+          />
+        </div>
+      </AppShell>
     </AuthGuard>
   );
 }

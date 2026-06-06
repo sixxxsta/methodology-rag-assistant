@@ -6,6 +6,7 @@ import { AuthGuard } from "@/components/auth-guard";
 import { CompetencyMatrixChart } from "@/components/competency-matrix-chart";
 import { CycleBanner } from "@/components/cycle-banner";
 import { CuratorGuard } from "@/components/curator-guard";
+import { AppShell } from "@/components/app-shell";
 import { Sidebar } from "@/components/sidebar";
 import {
   collectVacancies,
@@ -99,9 +100,8 @@ export default function CompetenciesPage() {
   return (
     <AuthGuard>
       <CuratorGuard>
-      <div className="flex min-h-screen flex-col md:flex-row">
-        <Sidebar className="md:sticky md:top-0 md:h-screen" />
-        <main className="flex-1 p-6 md:p-10">
+      <AppShell sidebar={<Sidebar className="hidden md:flex" />}>
+        <div className="p-6 md:p-10">
           <CycleBanner />
           <div className="mb-6 flex flex-wrap items-center gap-3">
             <Link
@@ -234,8 +234,8 @@ export default function CompetenciesPage() {
               )}
             </>
           )}
-        </main>
-      </div>
+        </div>
+      </AppShell>
     </CuratorGuard>
     </AuthGuard>
   );

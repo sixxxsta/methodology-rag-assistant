@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { AppShell } from "@/components/app-shell";
 import { Sidebar } from "@/components/sidebar";
 import {
   createStudentTeam,
@@ -63,9 +64,8 @@ export default function TeamsPage() {
 
   return (
     <AuthGuard>
-      <div className="flex min-h-screen flex-col md:flex-row">
-        <Sidebar className="md:sticky md:top-0 md:h-screen" />
-        <main className="flex-1 p-6 md:p-10">
+      <AppShell sidebar={<Sidebar className="hidden md:flex" />}>
+        <div className="p-6 md:p-10">
           <Link
             href="/catalog"
             className="mb-6 inline-flex items-center gap-2 text-sm text-muted hover:text-accent"
@@ -271,8 +271,8 @@ export default function TeamsPage() {
               </button>
             </section>
           )}
-        </main>
-      </div>
+        </div>
+      </AppShell>
     </AuthGuard>
   );
 }

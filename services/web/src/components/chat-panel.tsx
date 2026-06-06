@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Send } from "lucide-react";
 import { fetchHealth, sendChat } from "@/lib/api";
 import type { ChatMessage, HealthInfo } from "@/lib/types";
+import { AppShell } from "./app-shell";
 import { ChatMessageBubble, TypingIndicator } from "./chat-message";
 import { Sidebar } from "./sidebar";
 import clsx from "clsx";
@@ -22,7 +23,6 @@ export function ChatPanel() {
   const [sessionId, setSessionId] = useState("");
   const [loading, setLoading] = useState(false);
   const [health, setHealth] = useState<HealthInfo | null>(null);
-  const [lastQuestion, setLastQuestion] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -65,7 +65,6 @@ export function ChatPanel() {
 
     setInput("");
     resizeTextarea();
-    setLastQuestion(text);
     setMessages((m) => [...m, { id: crypto.randomUUID(), role: "user", content: text }]);
     setLoading(true);
 
@@ -118,11 +117,17 @@ export function ChatPanel() {
   const points = health?.knowledge_points ?? 0;
 
   return (
-    <div className="flex min-h-screen flex-col md:flex-row">
-      <Sidebar onNewChat={newChat} className="hidden md:flex" />
-
-      <main className="flex flex-1 flex-col min-h-0">
-        <header className="flex items-center gap-2 border-b border-border px-4 py-3 glass">
+    <AppShell
+      contained
+      sidebar={
+        <Sidebar
+          onNewChat={newChat}
+          className="hidden md:flex md:h-full md:shrink-0 md:overflow-y-auto"
+        />
+      }
+    >
+      <div className="flex h-full min-h-0 flex-col overflow-hidden bg-bg chat-area-bg">
+        <header className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3 glass">
           <span
             className={clsx("h-2 w-2 rounded-full", online ? "bg-success" : "bg-muted")}
           />
@@ -133,7 +138,7 @@ export function ChatPanel() {
           </span>
         </header>
 
-        <div className="flex-1 overflow-y-auto px-4 py-6 md:px-8">
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-6 md:px-8">
           <div className="mx-auto max-w-3xl space-y-6">
             {messages.map((msg, i) => {
               const prevUser =
@@ -154,7 +159,7 @@ export function ChatPanel() {
           </div>
         </div>
 
-        <footer className="border-t border-border p-4 glass">
+        <footer className="shrink-0 border-t border-border p-4 glass">
           <form
             onSubmit={handleSubmit}
             className="mx-auto flex max-w-3xl items-end gap-2 rounded-2xl border border-border bg-surface p-2 pl-4"
@@ -191,11 +196,11 @@ export function ChatPanel() {
             RAG: Qdrant → LLM (GigaChat / локальный inference)
           </p>
         </footer>
-      </main>
+      </div>
 
-      <div className="border-t border-border p-3 md:hidden">
+      <div className="shrink-0 border-t border-border p-3 md:hidden">
         <Sidebar onNewChat={newChat} className="!min-h-0 !w-full !border-0 !p-0" />
       </div>
-    </div>
+    </AppShell>
   );
 }

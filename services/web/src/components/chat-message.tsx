@@ -93,8 +93,8 @@ export function ChatMessageBubble({ message, sessionId, lastQuestion }: Props) {
           className={clsx(
             "inline-block rounded-2xl px-4 py-3 text-left text-sm leading-relaxed whitespace-pre-wrap",
             isUser
-              ? "bg-accent-soft border border-border"
-              : "glass shadow-lg shadow-black/20",
+              ? "border border-accent/30 bg-chat-user text-text"
+              : "glass shadow-lg shadow-accent/5",
           )}
         >
           {message.content}
@@ -118,10 +118,10 @@ export function TypingIndicator() {
       <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-surface-2 text-xs font-semibold text-accent">
         M
       </div>
-      <div className="glass flex gap-1 rounded-2xl px-4 py-4">
-        <span className="h-2 w-2 animate-bounce rounded-full bg-muted [animation-delay:0ms]" />
-        <span className="h-2 w-2 animate-bounce rounded-full bg-muted [animation-delay:150ms]" />
-        <span className="h-2 w-2 animate-bounce rounded-full bg-muted [animation-delay:300ms]" />
+      <div className="glass flex gap-1 rounded-2xl border border-border px-4 py-4">
+        <span className="h-2 w-2 animate-bounce rounded-full bg-accent/60 [animation-delay:0ms]" />
+        <span className="h-2 w-2 animate-bounce rounded-full bg-accent/60 [animation-delay:150ms]" />
+        <span className="h-2 w-2 animate-bounce rounded-full bg-accent/60 [animation-delay:300ms]" />
       </div>
     </article>
   );

@@ -595,13 +595,24 @@ export async function fetchProjectsDashboard() {
   }>(res);
 }
 
+export async function fetchPendingInterviews() {
+  const res = await fetch("/api/ed/projects/interviews/pending", {
+    headers: authHeaders(),
+  });
+  return handleResponse<{ items: PendingInterview[] }>(res);
+}
+
 export async function approveProjectInterview(interviewId: number, feedback?: string) {
   const res = await fetch(`/api/ed/projects/interviews/${interviewId}/approve`, {
     method: "POST",
     headers: authHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ feedback: feedback ?? null }),
   });
-  return handleResponse(res);
+  return handleResponse<{
+    team_claimed?: boolean;
+    claim_note?: string | null;
+    claim?: { project_id: number; team_id: number; status: string };
+  }>(res);
 }
 
 export async function rejectProjectInterview(interviewId: number, feedback: string) {
@@ -634,6 +645,7 @@ export async function fetchProjectCatalog(competencies?: string) {
       teams_left?: number;
       team_member_size?: number | null;
       interview_required?: boolean;
+      can_delete?: boolean;
     }>;
   }>(res);
 }
@@ -660,6 +672,8 @@ export type PendingInterview = {
   questions: string[];
   answers: string[];
   submitted_at?: string | null;
+  cycle_id?: number;
+  cycle_name?: string | null;
 };
 
 export type CatalogProjectRole = {
@@ -756,6 +770,14 @@ export async function submitProjectInterview(projectId: number, answers: string[
   }>(res);
 }
 
+export async function withdrawProjectInterview(projectId: number) {
+  const res = await fetch(`/api/ed/projects/catalog/${projectId}/interview/withdraw`, {
+    method: "POST",
+    headers: authHeaders(),
+  });
+  return handleResponse<{ status: string }>(res);
+}
+
 export async function withdrawTeamProjectClaim(projectId: number) {
   const res = await fetch(`/api/ed/projects/catalog/${projectId}/claim`, {
     method: "DELETE",
@@ -795,7 +817,9 @@ export type CatalogProjectDetail = {
   awaiting_curator_review?: boolean;
   can_start_interview?: boolean;
   can_submit_interview?: boolean;
+  can_withdraw_interview?: boolean;
   claimed_teams?: ClaimedTeam[];
+  can_delete?: boolean;
   my_enrollment?: {
     id: number | null;
     team_id?: number;
@@ -870,6 +894,26 @@ export async function fetchCompetencyChart() {
       industry_demand_pct: number;
       gap_type: string;
     }>;
+  }>(res);
+}
+
+export async function createStandaloneProject(body: {
+  title: string;
+  spec_markdown?: string;
+  team_size?: number;
+  max_teams?: number;
+  duration_weeks?: number;
+}) {
+  const res = await fetch("/api/ed/projects/standalone", {
+    method: "POST",
+    headers: authHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(body),
+  });
+  return handleResponse<{
+    id: number;
+    title: string;
+    spec_markdown?: string | null;
+    status: string;
   }>(res);
 }
 

@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { AuthGuard } from "@/components/auth-guard";
+import { AppShell } from "@/components/app-shell";
+import { ConfirmDialog } from "@/components/confirm-dialog";
 import { Sidebar } from "@/components/sidebar";
 import {
   claimProjectForTeam,
@@ -10,10 +12,11 @@ import {
   fetchCatalogProject,
   startProjectInterview,
   submitProjectInterview,
+  withdrawProjectInterview,
   withdrawTeamProjectClaim,
   type CatalogProjectDetail,
 } from "@/lib/api";
-import { getUser, isAdmin, isStudent } from "@/lib/auth";
+import { getUser, isStudent } from "@/lib/auth";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, BookOpen, Loader2, Trash2 } from "lucide-react";
 
@@ -28,9 +31,10 @@ export default function CatalogProjectPage({ params }: Props) {
   const [busy, setBusy] = useState(false);
   const [interviewAnswers, setInterviewAnswers] = useState<string[]>([]);
   const [showInterview, setShowInterview] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [confirmWithdrawInterview, setConfirmWithdrawInterview] = useState(false);
   const user = getUser();
   const student = isStudent(user);
-  const moderation = isAdmin(user);
   const router = useRouter();
 
   useEffect(() => {
@@ -133,6 +137,25 @@ export default function CatalogProjectPage({ params }: Props) {
     }
   }
 
+  async function onWithdrawInterview() {
+    if (!projectId) return;
+    setBusy(true);
+    setError("");
+    setInfo("");
+    try {
+      await withdrawProjectInterview(projectId);
+      setShowInterview(false);
+      setInterviewAnswers([]);
+      setInfo("Собеседование удалено. Можете пройти его заново.");
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Ошибка");
+    } finally {
+      setBusy(false);
+      setConfirmWithdrawInterview(false);
+    }
+  }
+
   async function onWithdraw() {
     if (!projectId) return;
     setBusy(true);
@@ -151,9 +174,19 @@ export default function CatalogProjectPage({ params }: Props) {
 
   return (
     <AuthGuard>
-      <div className="flex min-h-screen flex-col md:flex-row">
-        <Sidebar className="md:sticky md:top-0 md:h-screen" />
-        <main className="flex-1 p-6 md:p-10">
+      <AppShell sidebar={<Sidebar className="hidden md:flex" />}>
+        <div className="relative p-6 md:p-10">
+          {project?.can_delete && (
+            <button
+              type="button"
+              title="Удалить проект"
+              disabled={busy}
+              onClick={() => setConfirmDelete(true)}
+              className="absolute right-4 top-4 z-10 rounded-lg border border-red-500/40 p-2 text-red-400 hover:bg-red-500/10 disabled:opacity-50 md:right-10 md:top-10"
+            >
+              <Trash2 className="h-4 w-4" />
+            </button>
+          )}
           <Link
             href="/catalog"
             className="mb-6 inline-flex items-center gap-2 text-sm text-muted hover:text-accent"
@@ -172,39 +205,11 @@ export default function CatalogProjectPage({ params }: Props) {
 
           {project && (
             <article className="max-w-3xl">
-              <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+              <div className="mb-4 flex flex-wrap items-start justify-between gap-3 pr-12">
                 <h1 className="flex items-start gap-2 text-2xl font-bold leading-snug">
                   <BookOpen className="mt-1 h-7 w-7 shrink-0 text-accent" />
                   {project.title}
                 </h1>
-                {moderation && (
-                  <button
-                    type="button"
-                    disabled={busy}
-                    onClick={async () => {
-                      if (
-                        !window.confirm(
-                          `Удалить проект «${project.title}» из каталога? Это действие нельзя отменить.`,
-                        )
-                      ) {
-                        return;
-                      }
-                      setBusy(true);
-                      setError("");
-                      try {
-                        await deleteCatalogProject(projectId!);
-                        router.push("/catalog");
-                      } catch (e) {
-                        setError(e instanceof Error ? e.message : "Ошибка удаления");
-                        setBusy(false);
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-xl border border-red-500/40 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                    Удалить из каталога
-                  </button>
-                )}
               </div>
               {project.company_name && (
                 <p className="mt-2 text-accent">{project.company_name}</p>
@@ -309,9 +314,21 @@ export default function CatalogProjectPage({ params }: Props) {
                         </p>
                       )}
                       {project.awaiting_curator_review && (
-                        <p className="text-sm text-amber-300">
-                          Ответы на собеседование на проверке у куратора.
-                        </p>
+                        <div className="space-y-2">
+                          <p className="text-sm text-amber-300">
+                            Ответы на собеседование на проверке у куратора.
+                          </p>
+                          {project.can_withdraw_interview && (
+                            <button
+                              type="button"
+                              onClick={() => setConfirmWithdrawInterview(true)}
+                              disabled={busy}
+                              className="rounded-xl border border-red-500/40 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+                            >
+                              Удалить и пройти заново
+                            </button>
+                          )}
+                        </div>
                       )}
                       {project.interview_status === "passed" && (
                         <p className="text-sm text-emerald-400">
@@ -348,6 +365,16 @@ export default function CatalogProjectPage({ params }: Props) {
                             >
                               {busy ? "…" : "Отправить ответы"}
                             </button>
+                            {project.can_withdraw_interview && (
+                              <button
+                                type="button"
+                                onClick={() => setConfirmWithdrawInterview(true)}
+                                disabled={busy}
+                                className="rounded-xl border border-red-500/40 px-4 py-2 text-sm text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+                              >
+                                Отменить и начать заново
+                              </button>
+                            )}
                           </div>
                         )}
                       {project.interview_required &&
@@ -421,8 +448,46 @@ export default function CatalogProjectPage({ params }: Props) {
               )}
             </article>
           )}
-        </main>
-      </div>
+
+          <ConfirmDialog
+            open={confirmDelete}
+            title="Удаление проекта"
+            message="Вы действительно хотите удалить этот проект? Это действие нельзя отменить."
+            confirmLabel="Да"
+            cancelLabel="Нет"
+            danger
+            onCancel={() => setConfirmDelete(false)}
+            onConfirm={async () => {
+              setConfirmDelete(false);
+              if (!projectId) return;
+              setBusy(true);
+              setError("");
+              try {
+                await deleteCatalogProject(projectId);
+                router.push("/catalog");
+              } catch (e) {
+                setError(e instanceof Error ? e.message : "Ошибка удаления");
+                setBusy(false);
+              }
+            }}
+          />
+
+          <ConfirmDialog
+            open={confirmWithdrawInterview}
+            title="Удалить собеседование"
+            message={
+              project?.awaiting_curator_review
+                ? "Вы действительно хотите удалить отправленные ответы? Куратор больше не увидит это собеседование — после удаления можно пройти его заново."
+                : "Вы действительно хотите отменить собеседование? Введённые ответы будут удалены, можно начать сначала."
+            }
+            confirmLabel="Да"
+            cancelLabel="Нет"
+            danger
+            onCancel={() => setConfirmWithdrawInterview(false)}
+            onConfirm={onWithdrawInterview}
+          />
+        </div>
+      </AppShell>
     </AuthGuard>
   );
 }

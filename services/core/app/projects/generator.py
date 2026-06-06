@@ -60,6 +60,16 @@ META: team_size=5; duration_weeks=12; competencies=Python, Agile, Git
 Не выдумывай контакты — укажи плейсхолдеры, если данных нет."""
 
 
+def humanize_spec(text: str) -> str:
+    """Normalize LLM markdown for display in textarea."""
+    if not text:
+        return text
+    t = text.replace("\\n", "\n").replace("\\t", "\t").replace("\r\n", "\n")
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    lines = [ln.rstrip() for ln in t.split("\n")]
+    return "\n".join(lines).strip()
+
+
 def parse_tz_response(raw: str) -> tuple[str, str, int | None, int | None, str | None]:
     """Return title, spec_markdown, team_size, duration_weeks, competencies_csv."""
     text = raw.strip()
@@ -86,6 +96,7 @@ def parse_tz_response(raw: str) -> tuple[str, str, int | None, int | None, str |
     else:
         spec = text
 
+    spec = humanize_spec(spec)
     return title, spec, meta_team, meta_weeks, meta_comp
 
 

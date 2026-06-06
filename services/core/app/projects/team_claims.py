@@ -125,6 +125,7 @@ def viewer_team_context(
         "interview_feedback": None,
         "can_start_interview": False,
         "can_submit_interview": False,
+        "can_withdraw_interview": False,
         "interview_passed": True,
     }
     if not viewer_email:

@@ -1,15 +1,17 @@
 @import "tailwindcss";
 
 @theme {
-  --color-bg: #0c0f14;
-  --color-surface: #141a24;
-  --color-surface-2: #1c2433;
-  --color-border: #2a3548;
-  --color-text: #e8edf5;
-  --color-muted: #8b9bb8;
-  --color-accent: #5b8def;
-  --color-accent-soft: #243049;
-  --color-success: #3ecf8e;
+  --color-bg: #161624;
+  --color-surface: #1f1f32;
+  --color-surface-2: #2a2a42;
+  --color-border: #3f3f5c;
+  --color-text: #f2f2fa;
+  --color-muted: #a5a5c4;
+  --color-accent: #8f82f5;
+  --color-accent-soft: #4a4470;
+  --color-success: #34d399;
+  --color-chat-user: color-mix(in srgb, var(--color-accent) 18%, var(--color-surface-2));
+  --color-chat-assistant: color-mix(in srgb, var(--color-surface-2) 92%, var(--color-accent) 8%);
   --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 }
@@ -19,15 +21,27 @@
     @apply h-full antialiased;
   }
   body {
-    @apply h-full bg-bg text-text font-sans;
+    @apply h-full overflow-hidden bg-bg text-text font-sans;
     background-image:
-      radial-gradient(ellipse 80% 50% at 20% -10%, rgba(91, 141, 239, 0.12), transparent),
-      radial-gradient(ellipse 60% 40% at 90% 100%, rgba(62, 207, 142, 0.08), transparent);
+      radial-gradient(ellipse 80% 50% at 20% -10%, rgba(143, 130, 245, 0.12), transparent),
+      radial-gradient(ellipse 60% 40% at 90% 100%, rgba(52, 211, 153, 0.08), transparent);
   }
 }
 
 @layer utilities {
   .glass {
-    @apply border border-border bg-surface/80 backdrop-blur-md;
+    @apply border border-border backdrop-blur-md;
+    background-color: color-mix(in srgb, var(--color-surface) 88%, var(--color-accent) 12%);
+  }
+
+  .chat-area-bg {
+    background-color: var(--color-bg);
+    background-image:
+      radial-gradient(ellipse 70% 45% at 50% 0%, rgba(143, 130, 245, 0.08), transparent),
+      radial-gradient(ellipse 50% 35% at 50% 100%, rgba(52, 211, 153, 0.05), transparent);
+  }
+
+  .page-scroll {
+    @apply min-h-0 flex-1 overflow-y-auto overscroll-contain;
   }
 }

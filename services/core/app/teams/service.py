@@ -247,4 +247,4 @@ def transfer_leadership(
     )
     db.commit()
     db.refresh(team)
-    return _team_dict(db, team, viewer_email=new_email)
+    return _team_dict(db, team, viewer_email=email)
